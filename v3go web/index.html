@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#302343">
+  <title>Fatura • Controle mensal</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#inicio"><span class="brand-mark">f<span>.</span></span> fatura<span class="brand-dot">.</span></a>
+    <div class="sidebar-label">SEU ESPAÇO</div>
+    <a class="nav-link active" href="#inicio"><span aria-hidden="true">▦</span> Visão geral</a>
+    <a class="nav-link" href="#lancamentos"><span aria-hidden="true">≡</span> Lançamentos</a>
+    <a class="nav-link" href="#regras"><span aria-hidden="true">ⓘ</span> Sobre os cálculos</a>
+    <div class="sidebar-bottom"><span class="local-dot"></span> Seus dados ficam aqui<p>Salvos neste navegador.<br>Sem contas, sem complicação.</p></div>
+  </aside>
+  <main id="inicio">
+    <header class="topbar"><span>CONTROLE MENSAL</span><div class="save-status" id="save-status" role="status">Dados locais</div></header>
+    <div id="storage-warning" class="warning" role="alert" hidden></div>
+    <section class="page-heading">
+      <div><div class="eyebrow">UM MÊS MAIS ORGANIZADO</div><h1>Sua fatura, com clareza<span>.</span></h1><p>Todos os lançamentos e cada centavo em um só lugar.</p></div>
+      <div class="period-control"><span>Período da fatura</span><div class="period-fields"><select id="period-month" aria-label="Mês da fatura" aria-describedby="period-note"></select><input id="period-year" type="number" min="1" max="9999" value="2026" aria-label="Ano da fatura" aria-describedby="period-note"></div></div>
+    </section>
+    <p class="sr-only" id="period-note">O período identifica a fatura. Não altera valores nem gera parcelas.</p>
+    <section class="summary" aria-label="Resumo da fatura" aria-live="polite">
+      <article class="card total-card"><div class="card-label">TOTAL DA FATURA <span aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 18 18 6M6 6h12v12"/></svg></span></div><div class="amount" id="total">R$ 0,00</div><div class="card-foot" id="total-caption">Junho de 2026</div><div class="card-decoration" aria-hidden="true"></div></article>
+      <article class="card"><div class="card-label"><span><i class="dot fixed"></i> ITENS FIXOS</span><span class="card-icon" aria-hidden="true">↻</span></div><div class="amount" id="fixed-total">R$ 0,00</div><div class="card-foot" id="fixed-count"></div></article>
+      <article class="card"><div class="card-label"><span><i class="dot flexible"></i> ITENS FLEXÍVEIS</span><span class="card-icon" aria-hidden="true">〰</span></div><div class="amount" id="flexible-total">R$ 0,00</div><div class="card-foot" id="flexible-count"></div></article>
+      <article class="card"><div class="card-label"><span><i class="dot moises"></i> MOISÉS</span><span class="card-icon" aria-hidden="true">M</span></div><div class="amount" id="moises-total">R$ 0,00</div><div class="card-foot" id="moises-count"></div></article>
+    </section>
+    <section class="content-grid">
+      <section class="panel transactions" id="lancamentos" aria-labelledby="transactions-title">
+        <div class="panel-heading"><div><h2 id="transactions-title">Lançamentos</h2><p id="record-count"></p></div><button class="button primary" id="add-record"><span aria-hidden="true">＋</span> Novo lançamento</button></div>
+        <div class="toolbar"><div class="tabs" role="group" aria-label="Filtrar por grupo"><button class="tab selected" data-group="all" aria-pressed="true">Todos</button><button class="tab" data-group="fixed" aria-pressed="false">Fixos</button><button class="tab" data-group="flexible" aria-pressed="false">Flexíveis</button><button class="tab" data-group="moises" aria-pressed="false">Moisés</button></div><label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Buscar lançamento" aria-label="Buscar lançamento"></label></div>
+        <div class="table-wrap"><table><thead><tr><th scope="col">Descrição</th><th scope="col">Grupo</th><th scope="col" class="numeric">Valor</th><th scope="col" class="actions-heading">Ações</th></tr></thead><tbody id="records"></tbody><tfoot><tr><td colspan="2">Subtotal dos resultados</td><td class="numeric" id="filtered-total"></td><td></td></tr></tfoot></table></div>
+        <div class="empty-state" id="empty-state" hidden><div aria-hidden="true">≡</div><h3 id="empty-title"></h3><p id="empty-message"></p><button class="button secondary" id="empty-action"></button></div>
+        <div class="panel-footer"><span class="local-dot"></span> Alterações salvas automaticamente neste navegador.</div>
+      </section>
+      <aside class="details-column">
+        <section class="panel composition"><div class="eyebrow">O MÊS EM NÚMEROS</div><h2>Composição da fatura</h2><p>Como o total está distribuído.</p><div class="composition-bar" id="composition-bar" aria-hidden="true"></div><div id="composition-rows"></div><div class="combined"><span>Fixos + flexíveis</span><strong id="combined-total"></strong></div><p class="small-note" id="composition-note">Os três grupos compõem o total da fatura.</p></section>
+        <section class="source-card"><span class="source-icon" aria-hidden="true">▤</span><h3>Da planilha para o seu dia a dia</h3><p>Dados iniciais importados da sua planilha de junho de 2026. Você pode editar tudo por aqui.</p><button id="restore-source" class="text-button">Restaurar dados da planilha <span aria-hidden="true">→</span></button></section>
+      </aside>
+    </section>
+    <section class="panel rules" id="regras"><details><summary>Como os valores são calculados <span>Entenda as regras da planilha</span></summary><div class="rules-body"><p><strong>Total = itens fixos + itens flexíveis + Moisés.</strong> Cada grupo soma os valores dos seus lançamentos. O resumo “Fixos + flexíveis” corresponde ao total principal da planilha; o total da fatura inclui Moisés.</p><p>Valores em branco não entram na soma. “Mochila” foi importada sem valor. Parcelas como “12/12” e “1/2” são parte da descrição: não multiplicam valores e não geram lançamentos futuros. A coluna “Parcelas” está vazia no arquivo. “Mãe” é uma seção vazia, sem fórmula, e não foi transformada em grupo.</p><p>Não há vencimentos, descontos ou fórmulas de juros. “Iof” é um lançamento com valor preenchido, sem cálculo tributário automático. Junho de 2026 foi identificado pelo nome do arquivo; o período é apenas uma identificação editável.</p><p>Referência original: fixos <strong>R$ 376,10</strong>, flexíveis <strong>R$ 118,62</strong>, Moisés <strong>R$ 157,49</strong>, fixos + flexíveis <strong>R$ 494,72</strong> e fatura <strong>R$ 652,21</strong>. A quantidade de linhas foi simplificada: adicione quantos lançamentos precisar.</p></div></details></section>
+    <footer class="page-footer"><span>fatura. <span>Um pouco de ordem, mais tranquilidade.</span></span><button id="clear-data" class="danger-link">Apagar dados salvos</button></footer>
+  </main>
+  <dialog id="record-dialog" aria-labelledby="dialog-title"><form id="record-form" novalidate><div class="dialog-heading"><div><div class="eyebrow">CONTROLE DA FATURA</div><h2 id="dialog-title">Novo lançamento</h2></div><button type="button" class="icon-button" id="close-dialog" aria-label="Fechar formulário">×</button></div><p class="dialog-intro">Preencha os dados. O resumo é atualizado automaticamente.</p><label class="field">Descrição<input id="description" name="description" maxlength="200" required placeholder="Ex.: Amazon Marketplace 12/12"></label><label class="field">Grupo<select id="group" name="group"><option value="fixed">Item fixo</option><option value="flexible">Item flexível</option><option value="moises">Moisés</option></select></label><label class="field">Valor (R$)<input id="value" name="value" inputmode="decimal" placeholder="0,00" aria-describedby="value-help form-error"></label><p class="field-help" id="value-help">Use vírgula para os centavos. Deixe vazio se o valor ainda não estiver definido.</p><p id="form-error" class="form-error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button secondary" id="cancel-dialog">Cancelar</button><button type="submit" class="button primary">Salvar lançamento</button></div></form></dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message"><div class="confirm-content"><div class="eyebrow">CONFIRMAÇÃO</div><h2 id="confirm-title"></h2><p id="confirm-message"></p><div class="dialog-actions"><button class="button secondary" id="confirm-cancel">Cancelar</button><button class="button danger" id="confirm-ok">Confirmar</button></div></div></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
