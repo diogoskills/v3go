@@ -1,0 +1,5 @@
+Excel Fatura: New Fatura Junho 2026.xls
+
+Atividade: Pegue essa lógica de fatura do New Fatura Junho 2026.xls e crie um site moderno e bonito, se for preciso simplifique.
+
+me retorne um site em html, css e js
