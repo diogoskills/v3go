@@ -51,12 +51,6 @@ def add(page, description, value, kind="expense", method="credit", status="pendi
     page.locator("#group").select_option(category)
     page.get_by_role("button", name="Salvar lançamento", exact=True).click()
     assert not page.locator("#record-dialog").is_visible(), page.locator("#form-error").inner_text()
-    if funding and kind == "expense" and method != "credit":
-        view(page, "salary")
-        record_id = page.evaluate("description => currentRecords().find(record => record.description === description).id", description)
-        page.locator(f'select[data-commitment="{record_id}"]').select_option(funding)
-        view(page)
-
 
 
 def receive(page, which, value, date, correct=False):
@@ -66,13 +60,14 @@ def receive(page, which, value, date, correct=False):
     page.get_by_role("button", name=f"{prefix}: {name}", exact=True).click()
     page.locator("#receipt-value").fill(value)
     page.locator("#receipt-date").fill(date)
+    page.locator('input[name="receipt-impact"][value="include"]').check()
     page.get_by_role("button", name="Confirmar recebimento", exact=True).click()
     assert not page.locator("#receipt-dialog").is_visible()
 
 
 def pay(page, value, date="2026-10-05", edit=False):
     if edit:
-        view(page, "salary")
+        view(page)
         page.get_by_role("button", name="Corrigir pagamento da fatura", exact=True).click()
     else:
         view(page)
@@ -85,16 +80,15 @@ def pay(page, value, date="2026-10-05", edit=False):
 
 
 def set_balance(page, amount, date):
+    if page.locator("#edit-balance").is_visible():
+        page.locator("#edit-balance").click()
     page.locator("#bank-balance").fill(amount)
     page.locator("#balance-date").fill(date)
     page.get_by_role("button", name="Salvar saldo atual", exact=True).click()
     assert page.locator("#balance-error").is_hidden()
 
 
-def link_invoice(page, funding):
-    view(page, "salary")
-    page.locator('select[data-commitment="invoice"]').select_option(funding)
-    view(page)
+
 
 
 def create_category(page, name, inline=False):
@@ -163,7 +157,6 @@ with sync_playwright() as playwright:
     page.locator('[data-sum-category="fixed"]').check()
     assert page.evaluate("InvoiceMath.selectedTotal(creditRecords(),customSelection)") == 30000
     assert finance(page)["spending"] == 52000
-    link_invoice(page, "first")
     pay(page, "450,00")
     f = finance(page)
     assert f["expensePaid"] == 47000 and f["expensePending"] == 5000
@@ -179,20 +172,11 @@ with sync_playwright() as playwright:
     f = finance(page)
     assert f["incomeReceived"] == 170000 and f["available"] == 123000 and f["projected"] == 138000
     assert page.evaluate('salaryFor().first.expectedCents') == 86600
-    assert page.locator(".quarter-plan").first.get_by_text("Sobram R$\xa0430,00", exact=True).count() == 1
-    assert page.locator(".timing-warning").count() >= 1
-    commitments = page.evaluate("monthCommitments()")
-    assert len(commitments) == 3 and len([x for x in commitments if x["id"] == "invoice"]) == 1
-    assert sum(x["cents"] for x in commitments) == 52000
-    pending = page.locator('#quarter-plans select[data-commitment]').last
-    pending.select_option("first")
-    assert page.locator(".quarter-plan").first.get_by_text("Sobram R$\xa0380,00", exact=True).count() == 1
-    view(page)
-    link_invoice(page, "balance")
-    view(page, "salary")
-    assert page.locator('#balance-commitments select[data-commitment="invoice"]').count() == 1
-    assert "Disponível no mês" in page.locator("#balance-plan-note").inner_text()
-    print("PASS: second early receipt, correction, per-quarter budgets/dates, invoice is one commitment, balance funding")
+    assert page.locator(".quarter-column").count() == 2
+    assert page.locator("select[data-commitment]").count() == 0
+    assert page.locator("#unassigned-commitments").count() == 0
+    assert finance(page)["expensePending"] == 5000
+    print("PASS: independent receipt correction, simplified salary panel and no allocation controls")
 
     pay(page, "200,00", edit=True)
     f = finance(page)
@@ -313,16 +297,16 @@ with sync_playwright() as playwright:
     assert page.locator("#monthly-view").is_visible()
     print("PASS: desktop/mobile layouts, card aspect ratio, query placement, dialogs and keyboard tab navigation")
 
-    # Oversubscribed allocation and nonduplicating card commitment.
+    # Pending expenses still forecast without allocation.
     add(page, "Compromisso acima da quinzena", "1000,00", method="pix", funding="first")
     view(page, "salary")
-    assert page.locator(".quarter-plan.over-budget").count() >= 1
-    assert page.locator("#quarter-plans").get_by_text("Os compromissos ultrapassam o recebimento previsto.", exact=True).count() >= 1
+    assert finance(page)["expensePending"] >= 100000
+    assert page.locator(".quarter-plan").count() == 0
     view(page)
     page.get_by_role("button", name="Excluir Compromisso acima da quinzena", exact=True).click()
     page.locator("#confirm-ok").click()
     assert finance(page)["invoice"] == 46010
-    print("PASS: over-budget commitments flagged and record deletion preserves invoice")
+    print("PASS: pending expenses forecast without allocations and record deletion preserves invoice")
 
     # New balance-by-date and synchronized salary scenarios in an isolated storage context.
     fresh = browser.new_context(viewport={"width":1440,"height":1000}, timezone_id="America/Sao_Paulo")
@@ -471,7 +455,8 @@ with sync_playwright() as playwright:
     assert touch.locator(".card-live").evaluate("e=>getComputedStyle(e).filter") == "none"
     assert touch.locator("#credit-card").evaluate("e=>getComputedStyle(e).filter") == "none"
     assert touch.locator("#invoice-funding").count() == 0
-    assert touch.locator(".simple-due button").count() == 1
+    assert touch.locator(".simple-due button:visible").count() == 1
+    assert not touch.locator("#correct-payment").is_visible()
     assert touch.locator("#due-date").inner_text() == "05/10/2026"
     assert touch.locator("#projected-balance").inner_text() == "R$\xa01.105,28"
     mobile.close()

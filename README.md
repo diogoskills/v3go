@@ -1,6 +1,6 @@
 # v3go — Seu mês financeiro
 
-Aplicação em HTML, CSS e JavaScript puro, com visual responsivo em português do Brasil. Organiza lançamentos, fatura, recebimentos e compromissos por mês e ano. Sem backend, instalação, compilação ou integração bancária.
+Aplicação em HTML, CSS e JavaScript puro, com visual responsivo em português do Brasil. Organiza lançamentos, fatura, recebimentos e saldos por mês e ano. Sem backend, instalação, compilação ou integração bancária.
 
 ## Abrir
 
@@ -12,7 +12,7 @@ Uma base nova não contém lançamentos, compras, pagamentos ou recebimentos con
 
 Selecione mês e ano no cabeçalho. A tabela permite adicionar, editar e excluir entradas e saídas, com descrição, valor, data, categoria e uma etiqueta opcional. Entradas podem ser Previstas ou Recebidas; saídas, Pendentes ou Pagas. As formas de pagamento incluem cartão de crédito, Pix, débito, dinheiro, transferência e outro.
 
-A data de um novo lançamento começa na data atual do dispositivo, mesmo se o período selecionado for diferente. Pode ser alterada; ao salvar uma data vazia, usa-se hoje. Editar mantém os vínculos de planejamento existentes; novos vínculos são feitos na área de planejamento, sem o campo “Planejar saída com” no formulário.
+A data de um novo lançamento começa na data atual do dispositivo, mesmo se o período selecionado for diferente. Pode ser alterada; ao salvar uma data vazia, usa-se hoje. Editar mantém os vínculos de planejamento existentes; não há mais metodologia de vincular despesas às quinzenas na interface. Metadados antigos são preservados no armazenamento para não apagar informações existentes, mas não participam dos cálculos.
 
 Os cabeçalhos **Tipo** e **Data** são botões: Tipo alterna entradas/saídas primeiro; Data alterna mais recentes/mais antigos primeiro. A seta e o atributo acessível indicam a ordenação ativa. A ordem inicial é por data mais recente. Datas iguais preservam a ordem de criação, inclusive após editar ou recarregar; datas históricas não informadas ficam ao final. A ordenação afeta somente a consulta.
 
@@ -42,7 +42,7 @@ A lógica financeira está separada da interface em `InvoiceMath` e `FinanceMath
 
 ## Saldo atual e previsão por data
 
-Logo abaixo do cabeçalho, informe o saldo disponível no banco e sua data de referência, inicialmente hoje. A referência e a data de previsão são salvas por mês e ano, sem misturar períodos. Enquanto o saldo não for informado, é usado zero com um aviso claro.
+Logo abaixo do cabeçalho, informe o saldo disponível no banco e sua data de referência, inicialmente hoje. Depois de salvar, o formulário recolhe para um resumo discreto com valor, data e **Editar saldo**. A previsão por data permanece acessível. O formulário fica aberto nos meses sem saldo informado; saldos já existentes aparecem recolhidos ao reabrir o site. A referência e a data de previsão são salvas por mês e ano, sem misturar períodos. Enquanto o saldo não for informado, é usado zero com um aviso claro.
 
 A referência representa o **final do dia informado**. Movimentos realizados nessa data ou antes dela já estão incluídos no saldo e não são somados ou descontados novamente. Somente movimentos realizados em datas posteriores e até hoje alteram o saldo disponível. Se houver novas movimentações no mesmo dia da referência, atualize o saldo bancário informado; a aplicação não tem horários para distinguir movimentações dentro desse dia.
 
@@ -60,7 +60,7 @@ As categorias de filtro ficam em uma única faixa com rolagem horizontal, botõe
 
 ## Cartão visual
 
-O cartão usa uma imagem ilustrativa com identidade Nubank, criada para a interface e incorporada ao CSS. Não é um cartão real nem uma imagem oficial fornecida pelo banco. O fundo ocupa toda a área com `cover`, proporção de cartão e posicionamento central, sem esticar. Um blur sutil é aplicado somente à camada de fundo, padrão ou personalizada. A camada de contraste e os textos permanecem nítidos. Ao lado do cartão ficam apenas vencimento, status e a ação de pagamento; vínculos e correção do pagamento estão no planejamento por quinzenas.
+O cartão usa uma imagem ilustrativa com identidade Nubank, criada para a interface e incorporada ao CSS. Não é um cartão real nem uma imagem oficial fornecida pelo banco. O fundo ocupa toda a área com `cover`, proporção de cartão e posicionamento central, sem esticar. Um blur sutil é aplicado somente à camada de fundo, padrão ou personalizada. A camada de contraste e os textos permanecem nítidos. Ao lado do cartão ficam vencimento, status, a ação de pagamento e, quando necessário, a correção do pagamento. Não há controles de vinculação a quinzenas.
 
 **Trocar imagem** aceita PNG, JPEG, WebP ou AVIF do dispositivo, até 10 MB. A imagem é validada, reduzida proporcionalmente e armazenada como JPEG para limitar o uso de espaço. **Restaurar padrão** remove somente a personalização. Não são solicitados número de cartão, código de segurança ou dados bancários.
 
@@ -76,19 +76,22 @@ A aba tem os seguintes padrões editáveis:
 
 As previsões somam R$ 1.616,00. A diferença de R$ 156,00 em relação ao bruto é informativa, sem presumir descontos ou gerar despesa. O bruto não vira uma terceira entrada.
 
-Cada quinzena tem **Marcar como recebida**, podendo receber antes da data prevista. Informe a data real e o valor efetivo. O status passa a **Recebida**, em verde, e os saldos são atualizados. **Corrigir recebimento** substitui o valor/data da mesma confirmação e entrada; **Desfazer** devolve-a a prevista e remove a entrada recebida vinculada. Editar o valor/data dessa entrada na tabela atualiza a confirmação. Alterá-la para Prevista ou excluí-la também desfaz o recebimento. A descrição, categoria e etiqueta editadas são preservadas ao corrigir o recebimento. Essas operações são independentes por quinzena, mês e ano. Uma quinzena confirmada cria ou atualiza uma única entrada vinculada na tabela, com descrição, valor e data real. Essa entrada é o mesmo recebimento, não um segundo valor.
+Cada quinzena tem **Marcar como recebida**, podendo receber antes da data prevista. Informe a data real e o valor efetivo. O status passa a **Recebida**, em verde, e os saldos são atualizados conforme a escolha de inclusão e a referência. **Corrigir recebimento** substitui o valor/data da mesma confirmação e entrada; **Desfazer** devolve-a a prevista e remove a entrada recebida vinculada. Editar o valor/data dessa entrada na tabela atualiza a confirmação. Alterá-la para Prevista ou excluí-la também desfaz o recebimento. A descrição, categoria e etiqueta editadas são preservadas ao corrigir o recebimento. Essas operações são independentes por quinzena, mês e ano. Uma quinzena confirmada cria ou atualiza uma única entrada vinculada na tabela, com descrição, valor e data real. Essa entrada é o mesmo recebimento, não um segundo valor.
 
 Ao salvar a configuração de salário, ela vale para o mês selecionado e como padrão dos meses ainda não configurados. Confirmar um recebimento salva a configuração mensal completa, incluindo previsões e valores reais. Alterar padrões em outro mês não modifica essa configuração salva nem os recebimentos já confirmados.
 
-## Planejamento pelos recebimentos
+## Recebimentos e impacto no saldo
 
-Os dois recebimentos são apresentados pelas datas configuradas, sem pressupor que representam metades exatas do calendário. Dias inexistentes usam o último dia do mês.
+As duas quinzenas ficam lado a lado no computador e empilhadas no celular, ordenadas pelas datas configuradas. Cada cartão reúne valor previsto ou recebido, datas, status, ações de confirmação/correção/reversão e a indicação de impacto no saldo. A previsão financeira continua baseada nas datas de entradas e saídas; não exige alocações. Listas, campos e ações de vincular compromissos foram removidos.
 
-Saídas fora do cartão podem ser vinculadas à primeira quinzena, à segunda, ao saldo disponível ou ficar sem vínculo. O pagamento da fatura é vinculado no planejamento. Compras individuais no cartão não aparecem novamente como compromissos: a fatura é um único compromisso agregado.
+Em toda confirmação ou correção, escolha explicitamente:
 
-Cada quinzena reúne data, status, valor previsto ou recebido, ações e compromissos na mesma coluna. No computador são duas colunas, ordenadas pela data configurada; no celular ficam empilhadas. Cada coluna mostra quanto sobra ou falta, usando o real quando recebida e o previsto caso contrário. Os compromissos incluem pagos e pendentes para acompanhar o orçamento daquele recebimento. Valores não definidos são informados e ficam fora do total. Compromissos acima da previsão recebem destaque, assim como despesas com data anterior à entrada prevista/real vinculada.
+- **Incluir no saldo:** o recebimento participa dos cálculos conforme as datas. Valores realizados na referência ou antes dela já estão no saldo informado e continuam excluídos para evitar duplicidade.
+- **Apenas marcar como recebida:** o valor já está refletido no saldo informado e não é adicionado ao saldo disponível nem ao previsto, independentemente da data real. A entrada permanece no histórico e nos totais de entradas recebidas, com a indicação **Já considerado no saldo de referência**.
 
-Há áreas separadas para compromissos ainda não vinculados e para os que usarão saldo disponível. O saldo disponível já desconta pagamentos realizados; a área informa separadamente somente os compromissos pendentes ainda a cobrir.
+A escolha é independente por quinzena, mês e ano; pode ser alterada em **Corrigir recebimento**, sem criar outra entrada. Editar a entrada vinculada mantém a escolha. Desfazer/excluir mantém a sincronia com a quinzena. Em uma base antiga sem essa opção, o comportamento anterior é preservado: inclusão conforme a data de referência. Nenhum recebimento salvo é excluído automaticamente. O bruto permanece somente uma referência e não gera entrada adicional.
+
+A ação **Corrigir pagamento da fatura** fica junto ao vencimento/status quando existe um pagamento, preservando a correção de valor e data após remover as listas de compromissos.
 
 ## Categorias, etiquetas e vencimento
 
@@ -98,7 +101,7 @@ O vencimento padrão é dia 05, editável entre 1 e 31 para todos os meses. Quan
 
 ## Armazenamento e migração
 
-A versão atual usa `v3go.invoice.v5` em `localStorage`, contendo lançamentos mensais, categorias/etiquetas, salário padrão, configurações e recebimentos mensais, vínculos de planejamento, pagamento da fatura, imagem personalizada, referências de saldo e datas de previsão por mês e ano. Use o mesmo navegador e endereço do site para restaurar esses dados. Não há sincronização entre dispositivos.
+A versão atual usa `v3go.invoice.v5` em `localStorage`, contendo lançamentos mensais, categorias/etiquetas, salário padrão, configurações e recebimentos mensais (incluindo a escolha `includeInBalance` de cada quinzena), metadados de planejamento antigos preservados, pagamento da fatura, imagem personalizada, referências de saldo e datas de previsão por mês e ano. Use o mesmo navegador e endereço do site para restaurar esses dados. Não há sincronização entre dispositivos.
 
 Versões anteriores são migradas sem apagar dados e suas chaves são mantidas como cópias de segurança:
 
@@ -113,7 +116,7 @@ Versões anteriores são migradas sem apagar dados e suas chaves são mantidas c
 
 ## Visual e navegação
 
-O redesign se inspira nas referências de dashboards claros, com saldos em destaque na primeira linha, movimentações abaixo, ícones consistentes e cartões arredondados. Os indicadores usam roxo para fatura, verde para disponível, azul para entradas recebidas, âmbar para previstas e vermelho suave para saídas. Rótulos e detalhes continuam distinguindo os valores. A navegação destaca a seção escolhida e diferencia esse estado do hover. Todos os itens ficam acessíveis também no celular. Botões, links e campos têm transições curtas, foco visível e suporte a toque; a preferência de redução de movimento é respeitada. As regras financeiras permanecem as mesmas.
+O redesign se inspira nas referências de dashboards claros, com luz difusa no fundo, gradientes suaves, transparência discreta e sombras leves, com saldos em destaque na primeira linha, movimentações abaixo, ícones consistentes e cartões arredondados. Os indicadores usam roxo para fatura, verde para disponível, azul para entradas recebidas, âmbar para previstas e vermelho suave para saídas. Rótulos e detalhes continuam distinguindo os valores. A navegação destaca a seção escolhida e diferencia esse estado do hover. Todos os itens ficam acessíveis também no celular. Botões, links e campos têm transições curtas, foco visível e suporte a toque; a preferência de redução de movimento é respeitada. As regras financeiras permanecem as mesmas.
 
 ## Verificações executadas
 
@@ -127,18 +130,20 @@ A suíte `tests/check_browser.py` verifica no Chromium:
 - Pop-ups por mouse/teclado/toque, limites e rolagem, faixa horizontal de categorias e blur somente na imagem.
 - Isolamento de meses/anos e preservação de confirmações anteriores após alterar padrões.
 - Compra no cartão contada uma vez, pagamento com valor fixado, restante, correção e reversão sem duplicar gasto.
-- Planejamento por data, compromissos vinculados e não vinculados, saldo disponível e excesso de orçamento.
+- Previsão por datas sem alocações, painel de recebimentos simplificado e ausência de controles de vinculação.
 - Categorias, consultas da fatura, upload/restauração da imagem e persistência.
 - Layout de computador/celular, proporção do cartão, navegação por teclado e diálogos.
 - Migração de todas as versões anteriores e proteção de dados inválidos.
 
-A suíte `tests/check_redesign.py` verifica data automática e manual, fallback de data vazia, ordenação e desempate persistente, preservação de vínculos ao editar, navegação ativa, cores dos resumos, duas colunas no computador e empilhamento com ações por toque no celular.
+A suíte `tests/check_redesign.py` verifica data automática e manual, fallback de data vazia, ordenação e desempate persistente, preservação de dados ao editar, navegação ativa, cores dos resumos, duas colunas no computador e empilhamento com ações por toque no celular.
 
-Para executar, use `python tests/check_browser.py` e `python tests/check_redesign.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
+A suíte `tests/check_receipt_balance.py` verifica recolhimento/edição/persistência do saldo, escolha obrigatória em toda confirmação, inclusão/exclusão nos dois saldos, preservação das entradas históricas, correção sem duplicidade, compatibilidade dos recebimentos antigos e layout responsivo.
+
+Para executar, use `python tests/check_browser.py`, `python tests/check_redesign.py` e `python tests/check_receipt_balance.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
 
 ## Arquivos
 
 - `v3go web/index.html`, `style.css`, `script.js`: aplicação completa.
 - `v3go web.zip`: cópia dos três arquivos para distribuição.
-- `tests/check_browser.py` e `tests/check_redesign.py`: regressão financeira e de interface.
+- `tests/check_browser.py`, `tests/check_redesign.py` e `tests/check_receipt_balance.py`: regressão financeira e de interface.
 - `New Fatura Junho 2026.xlsx` e `prompt.txt`: referência histórica, sem importação automática.

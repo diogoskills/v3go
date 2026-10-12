@@ -54,7 +54,7 @@ with sync_playwright() as playwright:
     rid = page.evaluate('currentRecords()[0].id')
     page.locator('#nav-salary').click()
     assert page.locator('#nav-salary').get_attribute('aria-current') == 'location'
-    page.locator(f'select[data-commitment="{rid}"]').select_option('first')
+    assert page.locator("select[data-commitment]").count() == 0
     boxes = page.locator('.quarter-column').evaluate_all('cards => cards.map(c => ({x:c.getBoundingClientRect().x,y:c.getBoundingClientRect().y}))')
     assert boxes[0]['y'] == boxes[1]['y'] and boxes[0]['x'] < boxes[1]['x']
     page.locator('#tab-monthly').click()
@@ -62,7 +62,7 @@ with sync_playwright() as playwright:
     page.locator('#record-date').fill('')
     page.get_by_role('button', name='Salvar lançamento', exact=True).click()
     record = page.evaluate('currentRecords()[0]')
-    assert record['date'] == '2026-10-12' and record['funding'] == 'first' and record['createdOrder'] == 0
+    assert record['date'] == '2026-10-12' and record['funding'] is None and record['createdOrder'] == 0
     assert page.evaluate('financeFor()') == before
     page.reload()
     assert names() == ['Mais recente', 'Primeiro criado', 'Segundo criado', 'Mais antigo']
@@ -72,8 +72,9 @@ with sync_playwright() as playwright:
         assert page.locator('.nav-link.active').count() == 1
         assert page.locator('.nav-link.active').get_attribute('href') == href
     # Semantic indicator backgrounds and financial behavior remain unchanged.
-    colors = page.locator('.summary .card').evaluate_all('cards => cards.map(c => getComputedStyle(c).backgroundColor)')
-    assert len(set(colors)) == 6 and colors[0] == 'rgb(48, 35, 67)'
+    colors = page.locator('.summary .card').evaluate_all('cards => cards.map(c => getComputedStyle(c).color)')
+    assert len(set(colors)) == 6
+    assert 'rgb(48, 35, 67)' in page.locator('.total-card').evaluate('card => getComputedStyle(card).backgroundImage')
     page.locator('#bank-balance').focus()
     focus = page.locator('#bank-balance').evaluate('(input) => ({border:getComputedStyle(input).borderColor,shadow:getComputedStyle(input).boxShadow})')
     assert focus['shadow'] != 'none'
@@ -86,11 +87,13 @@ with sync_playwright() as playwright:
     page.get_by_role('button', name='Marcar como recebida: Primeira quinzena', exact=True).click()
     page.locator('#receipt-value').fill('866,00')
     page.locator('#receipt-date').fill('2026-10-12')
+    page.locator('input[name="receipt-impact"][value="include"]').check()
     page.locator('#receipt-form').evaluate('(form) => form.requestSubmit()')
     linked = page.evaluate('currentRecords().find(r => r.salarySource === "first")')
     assert linked['createdOrder'] == 4
     page.get_by_role('button', name='Corrigir recebimento: Primeira quinzena', exact=True).click()
     page.locator('#receipt-value').fill('860,00')
+    page.locator('input[name="receipt-impact"][value="include"]').check()
     page.locator('#receipt-form').evaluate('(form) => form.requestSubmit()')
     assert page.evaluate('currentRecords().filter(r => r.salarySource === "first").length') == 1
     assert page.evaluate('currentRecords().find(r => r.salarySource === "first").createdOrder') == 4
@@ -121,4 +124,4 @@ with sync_playwright() as playwright:
     browser.close()
 server.shutdown()
 server.server_close()
-print('PASS: date defaults/fallback, manual date, both sort toggles and creation ties, preserved planning/data, navigation states, semantic colors, desktop columns and touch/mobile without overflow')
+print('PASS: date defaults/fallback, manual date, both sort toggles and creation ties, preserved data and simplified receipts, navigation states, semantic colors, desktop columns and touch/mobile without overflow')
