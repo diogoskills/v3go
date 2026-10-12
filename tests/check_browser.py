@@ -49,10 +49,14 @@ def add(page, description, value, kind="expense", method="credit", status="pendi
         page.locator("#payment-method").select_option(method)
     page.locator("#record-status").select_option(status)
     page.locator("#group").select_option(category)
-    if kind == "expense" and method != "credit":
-        page.locator("#record-funding").select_option(funding)
     page.get_by_role("button", name="Salvar lançamento", exact=True).click()
     assert not page.locator("#record-dialog").is_visible(), page.locator("#form-error").inner_text()
+    if funding and kind == "expense" and method != "credit":
+        view(page, "salary")
+        record_id = page.evaluate("description => currentRecords().find(record => record.description === description).id", description)
+        page.locator(f'select[data-commitment="{record_id}"]').select_option(funding)
+        view(page)
+
 
 
 def receive(page, which, value, date, correct=False):

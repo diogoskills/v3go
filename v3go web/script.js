@@ -124,7 +124,8 @@ const validDate = value => {
 };
 const localDateString = date => `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const todayDate = () => localDateString(new Date());
-const defaultRecordDate = period => todayDate().startsWith(period) ? todayDate() : `${period}-01`;
+const defaultRecordDate = () => todayDate();
+const nextCreationOrder = records => Math.max(-1, ...records.map((record, index) => record.createdOrder ?? index)) + 1;
 function displayDate(value) {
   if (!value) return "Não informada";
   const [year, month, day] = value.split("-");
@@ -142,7 +143,7 @@ function receiptDate(period, receipt) {
 function syncSalaryRecords(data) {
   for (const period of new Set([...Object.keys(data.invoices), ...Object.keys(data.salaryMonths)])) {
     const salary = data.salaryMonths[period];
-    let records = data.invoices[period] ?? [];
+    let records = (data.invoices[period] ?? []).map((record, index) => ({ ...record, createdOrder: record.createdOrder ?? index }));
     for (const source of ["first", "second"]) {
       const receipt = salary?.[source];
       const existing = records.find(record => record.salarySource === source);
@@ -150,7 +151,7 @@ function syncSalaryRecords(data) {
       if (receipt?.received) {
         const prefix = `salary-${period}-${source}`;
         const id = existing?.id ?? (records.some(record => record.id === prefix) ? newId() : prefix);
-        records.push({ id, description: existing?.description ?? `Salário · ${FUNDINGS[source]}`, categoryId: existing?.categoryId ?? null, labelId: existing?.labelId ?? null, cents: receipt.actualCents, type: "income", date: receipt.actualDate, status: "received", paymentMethod: null, funding: null, salarySource: source });
+        records.push({ id, createdOrder: existing?.createdOrder ?? nextCreationOrder(records), description: existing?.description ?? `Salário · ${FUNDINGS[source]}`, categoryId: existing?.categoryId ?? null, labelId: existing?.labelId ?? null, cents: receipt.actualCents, type: "income", date: receipt.actualDate, status: "received", paymentMethod: null, funding: null, salarySource: source });
       }
     }
     if (records.length || Object.hasOwn(data.invoices, period)) data.invoices[period] = records;
@@ -248,7 +249,7 @@ function validateState(data) {
   for (const [period, records] of Object.entries(data.invoices)) {
     if (!validPeriod(period) || !Array.isArray(records)) throw new Error("Período inválido.");
     const ids = new Set();
-    invoices[period] = records.map(record => {
+    invoices[period] = records.map((record, index) => {
       const income = record?.type === "income";
       if (!record || typeof record.id !== "string" || !record.id || ids.has(record.id) ||
           typeof record.description !== "string" || !record.description.trim() || record.description.length > 200 ||
@@ -259,7 +260,7 @@ function validateState(data) {
           (income ? record.paymentMethod !== null : !Object.hasOwn(METHODS, record.paymentMethod)) ||
           (record.funding !== null && !Object.hasOwn(FUNDINGS, record.funding)) || (income && record.funding !== null) || ![null, "first", "second"].includes(record.salarySource)) throw new Error("Lançamento inválido.");
       ids.add(record.id);
-      return { id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding, salarySource: record.salarySource };
+      return { id: record.id, createdOrder: Number.isSafeInteger(record.createdOrder) && record.createdOrder >= 0 ? record.createdOrder : index, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding, salarySource: record.salarySource };
     });
     InvoiceMath.calculate(creditRecords(invoices[period]), categories);
   }
@@ -384,6 +385,7 @@ let editingPeriod = null;
 let receiptEditing = null;
 let settlementPeriod = null;
 let currentView = "monthly";
+let recordSort = { key: "date", direction: "descending" };
 let optionEditor = null;
 let confirmationAction = null;
 let toastTimer;
@@ -459,9 +461,7 @@ function renderRow(record) {
   badge.textContent = optionName("categories", record.categoryId);
   category.append(badge);
   const type = makeCell(record.type === "income" ? "Entrada" : "Saída", `type-cell ${record.type}`);
-  const date = document.createElement("small");
-  date.textContent = displayDate(record.date);
-  type.append(date);
+  const date = makeCell(displayDate(record.date), "date-cell");
   const statusText = record.status === "received" ? "Recebida" : record.status === "expected" ? "Prevista" : record.status === "paid" ? "Paga" : "Pendente";
   const status = makeCell(statusText, `status-cell ${record.status}`);
   if (record.paymentMethod) {
@@ -470,7 +470,7 @@ function renderRow(record) {
     status.append(method);
   }
   const label = makeCell(optionName("labels", record.labelId), "label-cell");
-  row.append(type, description, status, category, label, makeCell(record.cents === null ? "Sem valor" : currency(record.cents), record.cents === null ? "numeric pending" : "numeric"));
+  row.append(type, date, description, status, category, label, makeCell(record.cents === null ? "Sem valor" : currency(record.cents), record.cents === null ? "numeric pending" : "numeric"));
   const actions = makeCell("");
   const wrapper = document.createElement("div");
   wrapper.className = "row-actions";
@@ -599,6 +599,24 @@ function render() {
   const selectedType = $("type-filter").value;
   const visible = records.filter(record => (selectedType === "all" || record.type === selectedType || (selectedType === "credit" && record.type === "expense" && record.paymentMethod === "credit")) && (selectedCategory === "all" || (record.categoryId ?? "none") === selectedCategory) &&
     (selectedLabel === "all" || (record.labelId ?? "") === selectedLabel) && compareName(record.description).includes(query));
+  visible.sort((a, b) => {
+    let comparison = 0;
+    if (recordSort.key === "type") comparison = (a.type === "income" ? 0 : 1) - (b.type === "income" ? 0 : 1);
+    else {
+      if (!a.date && b.date) return 1;
+      if (a.date && !b.date) return -1;
+      comparison = (a.date ?? "").localeCompare(b.date ?? "");
+    }
+    return (recordSort.direction === "ascending" ? comparison : -comparison) || a.createdOrder - b.createdOrder;
+  });
+  for (const key of ["type", "date"]) {
+    const button = $("sort-" + key);
+    const active = recordSort.key === key;
+    button.parentElement.setAttribute("aria-sort", active ? recordSort.direction : "none");
+    button.querySelector("span").textContent = active ? (recordSort.direction === "ascending" ? "↑" : "↓") : "↕";
+    const orderLabel = key === "type" ? (recordSort.direction === "ascending" ? "entradas primeiro" : "saídas primeiro") : (recordSort.direction === "ascending" ? "mais antigos primeiro" : "mais recentes primeiro");
+    button.title = active ? `Ordem atual: ${orderLabel}. Clique para inverter.` : `Ordenar por ${key === "type" ? "tipo" : "data"}.`;
+  }
   $("records").replaceChildren(...visible.map(renderRow));
   $("filtered-total").textContent = currency(InvoiceMath.sum(visible));
   $("record-count").textContent = `${records.length} ${records.length === 1 ? "lançamento" : "lançamentos"} · ${periodLabel(state.period)}${visible.length !== records.length ? ` · ${visible.length} exibidos` : ""}`;
@@ -632,7 +650,6 @@ function openRecord(record = null) {
   $("record-type").disabled = !!record?.salarySource;
   $("record-date").value = record ? record.date ?? "" : defaultRecordDate(state.period);
   $("payment-method").value = record?.paymentMethod ?? "credit";
-  $("record-funding").value = record?.funding ?? "";
   updateRecordFields(record?.status ?? "pending");
   $("record-dialog").showModal();
   $("description").focus();
@@ -794,15 +811,15 @@ $("record-form").addEventListener("submit", event => {
     if (categoryId && !state.categories.some(category => category.id === categoryId)) throw new Error("Selecione uma categoria válida.");
     if (labelId && !state.labels.some(label => label.id === labelId)) throw new Error("Selecione uma etiqueta válida.");
     const type = $("record-type").value;
-    const date = $("record-date").value || null;
+    const date = $("record-date").value || todayDate();
     const previousRecord = (state.invoices[editingPeriod] ?? []).find(item => item.id === editingId);
     invalidField = "record-date";
-    if (!validDate(date) && !(previousRecord && previousRecord.date === null && date === null)) throw new Error("Preencha uma data válida para o lançamento.");
+    if (!validDate(date)) throw new Error("Preencha uma data válida para o lançamento.");
     const status = $("record-status").value;
     if (["received", "paid"].includes(status) && cents === null) { invalidField = "value"; throw new Error("Um valor confirmado precisa ser preenchido."); }
     const paymentMethod = type === "expense" ? $("payment-method").value : null;
-    const funding = type === "expense" && paymentMethod !== "credit" ? $("record-funding").value || null : null;
-    const record = { id: editingId ?? newId(), description, categoryId, labelId, cents, type, date, status, paymentMethod, funding, salarySource: previousRecord?.salarySource ?? null };
+    const funding = type === "expense" && paymentMethod !== "credit" ? previousRecord?.funding ?? null : null;
+    const record = { id: editingId ?? newId(), createdOrder: previousRecord?.createdOrder ?? nextCreationOrder(state.invoices[editingPeriod] ?? []), description, categoryId, labelId, cents, type, date, status, paymentMethod, funding, salarySource: previousRecord?.salarySource ?? null };
     const previous = state.invoices[editingPeriod] ?? [];
     const records = editingId ? previous.map(item => item.id === editingId ? record : item) : [...previous, record];
     const candidate = JSON.parse(JSON.stringify(state));
@@ -948,7 +965,6 @@ function updateRecordFields(preferredStatus = $("record-status").value) {
   const income = $("record-type").value === "income";
   const credit = !income && $("payment-method").value === "credit";
   $("payment-method-field").hidden = income;
-  $("record-funding-field").hidden = income || credit;
   $("credit-method-note").hidden = !credit;
   const options = income ? [["expected", "Prevista"], ["received", "Recebida"]] : [["pending", "Pendente"], ["paid", credit ? "Paga no cartão (sem saída de dinheiro)" : "Paga"]];
   $("record-status").replaceChildren();
@@ -960,7 +976,16 @@ function updateRecordFields(preferredStatus = $("record-status").value) {
   }
   $("record-status").value = options.some(([value]) => value === preferredStatus) ? preferredStatus : options[0][0];
 }
+function setActiveNavigation(href) {
+  document.querySelectorAll(".nav-link").forEach(link => {
+    const active = link.getAttribute("href") === href;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "location");
+    else link.removeAttribute("aria-current");
+  });
+}
 function setView(view) {
+  setActiveNavigation(view === "salary" ? "#salario" : "#inicio");
   currentView = view;
   for (const id of ["monthly", "salary"]) {
     const active = id === view;
@@ -1038,7 +1063,6 @@ function renderSalary() {
   const expected = FinanceMath.safe(salary.first.expectedCents + salary.second.expectedCents);
   $("salary-net").textContent = currency(expected);
   $("salary-difference").textContent = currency(FinanceMath.safe(salary.grossCents - expected));
-  $("salary-receipts").replaceChildren();
   $("quarter-plans").replaceChildren();
   const commitments = monthCommitments();
   const ordered = ["first", "second"].sort((a, b) => salary[a].day - salary[b].day);
@@ -1055,10 +1079,11 @@ function renderSalary() {
     status.textContent = receipt.received ? "Recebida" : "Prevista";
     heading.append(name, status);
     const expectedValue = document.createElement("p");
-    expectedValue.textContent = `Prevista: ${currency(receipt.expectedCents)} · ${displayDate(receiptDate(state.period, receipt))}`;
+    expectedValue.className = "receipt-date";
+    expectedValue.textContent = `Recebimento previsto em ${displayDate(receiptDate(state.period, receipt))}`;
     const actual = document.createElement("div");
     actual.className = "amount";
-    actual.textContent = currency(receipt.received ? receipt.actualCents : 0);
+    actual.textContent = currency(receipt.received ? receipt.actualCents : receipt.expectedCents);
     const date = document.createElement("p");
     date.className = "small-note";
     date.textContent = receipt.received ? `Recebida em ${displayDate(receipt.actualDate)}` : "Ainda não recebida. Você pode confirmar antes da data prevista.";
@@ -1089,7 +1114,6 @@ function renderSalary() {
     amountLine.className = "indicator-line";
     amountLine.append(actual, receiptHelp);
     card.append(heading, expectedValue, amountLine, date, actions);
-    $("salary-receipts").append(card);
     const selected = commitments.filter(commitment => commitment.funding === id);
     const committed = InvoiceMath.sum(selected);
     const reference = receipt.received ? receipt.actualCents : receipt.expectedCents;
@@ -1097,9 +1121,10 @@ function renderSalary() {
     const plan = document.createElement("section");
     plan.className = `quarter-plan${left < 0 || committed > receipt.expectedCents ? " over-budget" : ""}`;
     const planHeading = document.createElement("h3");
-    planHeading.textContent = `${FUNDINGS[id]} · ${displayDate(receiptDate(state.period, receipt))}`;
+    planHeading.textContent = "Compromissos deste recebimento";
     const text = document.createElement("p");
-    text.textContent = `Previsto ${currency(receipt.expectedCents)} · Recebido ${currency(receipt.received ? receipt.actualCents : 0)} · Compromissos ${currency(committed)}`;
+    text.textContent = `Total vinculado: ${currency(committed)}`;
+    if (receipt.received) date.textContent += ` · Previsão original: ${currency(receipt.expectedCents)}`;
     const result = document.createElement("strong");
     result.className = "plan-result";
     result.textContent = left < 0 ? `Faltam ${currency(-left)}` : `Sobram ${currency(left)}`;
@@ -1132,7 +1157,9 @@ function renderSalary() {
       plan.append(empty);
     }
     selected.forEach(commitment => plan.append(commitmentElement(commitment, receipt)));
-    $("quarter-plans").append(plan);
+    card.classList.add("quarter-column");
+    card.append(plan);
+    $("quarter-plans").append(card);
   }
   for (const [id, funding] of [["unassigned-commitments", null], ["balance-commitments", "balance"]]) {
     $(id).replaceChildren();
@@ -1180,6 +1207,14 @@ for (const view of ["monthly", "salary"]) {
 }
 $("nav-salary").addEventListener("click", event => { event.preventDefault(); setView("salary"); $("tab-salary").scrollIntoView({ block: "start" }); });
 document.querySelector('.nav-link[href="#lancamentos"]').addEventListener("click", () => setView("monthly"));
+document.querySelectorAll(".nav-link").forEach(link => link.addEventListener("click", () => {
+  if (link.getAttribute("href") === "#inicio") setView("monthly");
+  setActiveNavigation(link.getAttribute("href"));
+}));
+for (const key of ["type", "date"]) $("sort-" + key).addEventListener("click", () => {
+  recordSort = { key, direction: recordSort.key === key ? (recordSort.direction === "ascending" ? "descending" : "ascending") : key === "date" ? "descending" : "ascending" };
+  render();
+});
 $("record-type").addEventListener("change", () => updateRecordFields());
 $("payment-method").addEventListener("change", () => updateRecordFields());
 $("type-filter").addEventListener("change", render);
@@ -1201,7 +1236,7 @@ $("salary-config").addEventListener("submit", event => {
     $("salary-config-error").hidden = false;
   }
 });
-$("salary-receipts").addEventListener("click", event => {
+$("quarter-plans").addEventListener("click", event => {
   const confirm = event.target.closest("button[data-receipt]");
   if (confirm) { openReceipt(confirm.dataset.receipt); return; }
   const undo = event.target.closest("button[data-undo-receipt]");

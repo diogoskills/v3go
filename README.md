@@ -12,6 +12,10 @@ Uma base nova não contém lançamentos, compras, pagamentos ou recebimentos con
 
 Selecione mês e ano no cabeçalho. A tabela permite adicionar, editar e excluir entradas e saídas, com descrição, valor, data, categoria e uma etiqueta opcional. Entradas podem ser Previstas ou Recebidas; saídas, Pendentes ou Pagas. As formas de pagamento incluem cartão de crédito, Pix, débito, dinheiro, transferência e outro.
 
+A data de um novo lançamento começa na data atual do dispositivo, mesmo se o período selecionado for diferente. Pode ser alterada; ao salvar uma data vazia, usa-se hoje. Editar mantém os vínculos de planejamento existentes; novos vínculos são feitos na área de planejamento, sem o campo “Planejar saída com” no formulário.
+
+Os cabeçalhos **Tipo** e **Data** são botões: Tipo alterna entradas/saídas primeiro; Data alterna mais recentes/mais antigos primeiro. A seta e o atributo acessível indicam a ordenação ativa. A ordem inicial é por data mais recente. Datas iguais preservam a ordem de criação, inclusive após editar ou recarregar; datas históricas não informadas ficam ao final. A ordenação afeta somente a consulta.
+
 Os filtros de tipo, categoria, etiqueta e descrição afetam somente a tabela. A soma dos valores exibidos é uma consulta de valores, não um saldo líquido. A composição e a soma personalizada por categorias continuam disponíveis e consideram somente as compras no cartão que compõem a fatura.
 
 Valores em branco ficam fora dos cálculos; uma confirmação de novo lançamento precisa de um valor. Valores negativos permitem ajustes e invertem o efeito do lançamento. Os cálculos e a formatação usam centavos inteiros, sem arredondar valores monetários intermediários.
@@ -80,9 +84,9 @@ Ao salvar a configuração de salário, ela vale para o mês selecionado e como 
 
 Os dois recebimentos são apresentados pelas datas configuradas, sem pressupor que representam metades exatas do calendário. Dias inexistentes usam o último dia do mês.
 
-Saídas fora do cartão podem ser vinculadas à primeira quinzena, à segunda, ao saldo disponível ou ficar sem vínculo. O pagamento da fatura é vinculado no painel da fatura ou no planejamento. Compras individuais no cartão não aparecem novamente como compromissos: a fatura é um único compromisso agregado.
+Saídas fora do cartão podem ser vinculadas à primeira quinzena, à segunda, ao saldo disponível ou ficar sem vínculo. O pagamento da fatura é vinculado no planejamento. Compras individuais no cartão não aparecem novamente como compromissos: a fatura é um único compromisso agregado.
 
-Cada quinzena mostra previsão, recebimento efetivo, compromissos e quanto sobra ou falta, usando o real quando recebida e o previsto caso contrário. Os compromissos incluem pagos e pendentes para acompanhar o orçamento daquele recebimento. Valores não definidos são informados e ficam fora do total. Compromissos acima da previsão recebem destaque, assim como despesas com data anterior à entrada prevista/real vinculada.
+Cada quinzena reúne data, status, valor previsto ou recebido, ações e compromissos na mesma coluna. No computador são duas colunas, ordenadas pela data configurada; no celular ficam empilhadas. Cada coluna mostra quanto sobra ou falta, usando o real quando recebida e o previsto caso contrário. Os compromissos incluem pagos e pendentes para acompanhar o orçamento daquele recebimento. Valores não definidos são informados e ficam fora do total. Compromissos acima da previsão recebem destaque, assim como despesas com data anterior à entrada prevista/real vinculada.
 
 Há áreas separadas para compromissos ainda não vinculados e para os que usarão saldo disponível. O saldo disponível já desconta pagamentos realizados; a área informa separadamente somente os compromissos pendentes ainda a cobrir.
 
@@ -107,6 +111,10 @@ Versões anteriores são migradas sem apagar dados e suas chaves são mantidas c
 
 **Apagar dados salvos**, com confirmação, remove lançamentos, pagamentos, vínculos mensais, recebimentos de salário e referências de saldo de todos os meses. Mantém configurações globais legíveis, salário padrão e imagem. Se os dados não podem ser lidos, redefine uma base vazia com padrões. Falhas de gravação são informadas; em caso de falta de espaço, não se promete persistência das alterações da sessão.
 
+## Visual e navegação
+
+O redesign se inspira nas referências de dashboards claros, com saldos em destaque na primeira linha, movimentações abaixo, ícones consistentes e cartões arredondados. Os indicadores usam roxo para fatura, verde para disponível, azul para entradas recebidas, âmbar para previstas e vermelho suave para saídas. Rótulos e detalhes continuam distinguindo os valores. A navegação destaca a seção escolhida e diferencia esse estado do hover. Todos os itens ficam acessíveis também no celular. Botões, links e campos têm transições curtas, foco visível e suporte a toque; a preferência de redução de movimento é respeitada. As regras financeiras permanecem as mesmas.
+
 ## Verificações executadas
 
 A suíte `tests/check_browser.py` verifica no Chromium:
@@ -124,11 +132,13 @@ A suíte `tests/check_browser.py` verifica no Chromium:
 - Layout de computador/celular, proporção do cartão, navegação por teclado e diálogos.
 - Migração de todas as versões anteriores e proteção de dados inválidos.
 
-Para executar, use `python tests/check_browser.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
+A suíte `tests/check_redesign.py` verifica data automática e manual, fallback de data vazia, ordenação e desempate persistente, preservação de vínculos ao editar, navegação ativa, cores dos resumos, duas colunas no computador e empilhamento com ações por toque no celular.
+
+Para executar, use `python tests/check_browser.py` e `python tests/check_redesign.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
 
 ## Arquivos
 
 - `v3go web/index.html`, `style.css`, `script.js`: aplicação completa.
 - `v3go web.zip`: cópia dos três arquivos para distribuição.
-- `tests/check_browser.py`: regressão financeira e de interface.
+- `tests/check_browser.py` e `tests/check_redesign.py`: regressão financeira e de interface.
 - `New Fatura Junho 2026.xlsx` e `prompt.txt`: referência histórica, sem importação automática.
