@@ -15,7 +15,7 @@ server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietHandler, directory=s
 threading.Thread(target=server.serve_forever, daemon=True).start()
 atexit.register(server.server_close)
 atexit.register(server.shutdown)
-BASE = f'http://127.0.0.1:{server.server_port}/index.html' 
+BASE = f'http://127.0.0.1:{server.server_port}/index.html'
 
 def total(q): return q.evaluate('InvoiceMath.calculate(currentRecords(),state.categories).total')
 def period(q,month,year=2026):
