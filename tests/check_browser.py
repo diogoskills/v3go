@@ -1,207 +1,312 @@
-from playwright.sync_api import sync_playwright
+"""Regressão do site. Dados fictícios abaixo são exclusivos dos testes."""
+from datetime import datetime
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import atexit
 import json
 import shutil
 import threading
-import atexit
-from functools import partial
-from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from playwright.sync_api import sync_playwright
+
 
 class QuietHandler(SimpleHTTPRequestHandler):
- def log_message(self, *_): pass
+    def log_message(self, *_):
+        pass
+
 
 root = Path(__file__).resolve().parents[1]
-server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietHandler, directory=str(root / 'v3go web')))
+server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(root / "v3go web")))
 threading.Thread(target=server.serve_forever, daemon=True).start()
 atexit.register(server.server_close)
 atexit.register(server.shutdown)
-BASE = f'http://127.0.0.1:{server.server_port}/index.html'
+URL = f"http://127.0.0.1:{server.server_port}/index.html"
+KEY = "v3go.invoice.v3"
 
-def total(q): return q.evaluate('InvoiceMath.calculate(currentRecords(),state.categories).total')
-def period(q,month,year=2026):
- q.locator('#period-year').fill(str(year));q.locator('#period-year').dispatch_event('change')
- q.locator('#period-month').select_option(f'{month:02d}')
-def add(q,desc,value,category=None,label=None):
- q.locator('#add-record').click();q.locator('#description').fill(desc);q.locator('#value').fill(value)
- if category is not None:q.locator('#group').select_option(category)
- if label is not None:q.locator('#record-label').select_option(label)
- q.get_by_role('button',name='Salvar lançamento',exact=True).click()
-def create_option(q,name,type='category',inline=False):
- q.locator('#create-'+type if inline else '#manage-add-'+type).click()
- q.locator('#option-name').fill(name);q.get_by_role('button',name='Salvar opção',exact=True).click()
- return q.evaluate(f'state.{"categories" if type=="category" else "labels"}.find(x=>x.name==={json.dumps(name)}).id')
-def rename(q,name,new,type='categoria'):
- q.get_by_role('button',name=f'Renomear {type} {name}',exact=True).click()
- q.locator('#option-name').fill(new);q.get_by_role('button',name='Salvar opção',exact=True).click()
-def delete(q,name,target='',type='categoria'):
- q.get_by_role('button',name=f'Excluir {type} {name}',exact=True).click()
- if q.locator('#transfer-field').is_visible():q.locator('#transfer-option').select_option(target)
- q.locator('#confirm-ok').click()
-with sync_playwright() as p:
- b=p.chromium.launch(executable_path=shutil.which('chromium'),headless=True,args=['--no-sandbox'])
- context=b.new_context(viewport={'width':1440,'height':1050},timezone_id='America/Sao_Paulo')
- q=context.new_page();errors=[];q.on('pageerror',lambda e:errors.append(str(e)))
- q.goto(BASE)
- assert q.evaluate('state.period')=='2026-10'
- assert total(q)==65221 and q.locator('#records tr').count()==33
- assert q.evaluate('state.dueDay')==5
- assert q.evaluate('InvoiceMath.sum([{cents:10},{cents:20}])')==30
- assert q.evaluate('currency(9007199254740991)')=='R$\xa090.071.992.547.409,91'
- assert q.evaluate('decimalInput(9007199254740991)')=='90071992547409,91'
- assert q.evaluate('InvoiceMath.parseMoney("90071992547409,91")')==9007199254740991
- for m in (1,6,9,11,12):
-  period(q,m);assert total(q)==0;assert q.locator('#records tr').count()==0
-  assert q.locator('.category-summary').count()==3
-  assert q.locator('#category-tabs').get_by_role('button',name='Moisés',exact=True).count()==1
- period(q,10,2027);assert total(q)==0
- print('PASS: base only in October 2026; five other months and October 2027 empty, settings preserved')
- period(q,11)
- add(q,'Novembro somente','0,10')
- assert total(q)==10
- period(q,10);assert total(q)==65221
- period(q,11)
- q.locator('#records tr').first.locator('[data-action=edit]').click()
- q.locator('#value').fill('0,30');q.get_by_role('button',name='Salvar lançamento',exact=True).click()
- assert total(q)==30
- period(q,10);assert total(q)==65221
- period(q,11)
- q.locator('#records tr').first.locator('[data-action=delete]').click();q.locator('#confirm-cancel').click();assert total(q)==30
- q.locator('#records tr').first.locator('[data-action=delete]').click();q.locator('#confirm-ok').click();assert total(q)==0
- period(q,10);assert total(q)==65221
- print('PASS: add/edit/delete are isolated to selected month; cancellation preserves record')
- # Nested category creation preserves fields and auto-selects new option.
- period(q,11)
- q.locator('#add-record').click();q.locator('#description').fill('Viagem teste');q.locator('#value').fill('12,34')
- cat=create_option(q,'Viagem',inline=True)
- assert q.locator('#group').input_value()==cat
- assert q.locator('#description').input_value()=='Viagem teste'
- assert q.locator('#value').input_value()=='12,34'
- label=create_option(q,'Pessoal',type='label',inline=True)
- assert q.locator('#record-label').input_value()==label
- q.get_by_role('button',name='Salvar lançamento',exact=True).click();assert total(q)==1234
- q.locator('#manage-add-category').click()
- q.get_by_role('button',name='Salvar opção',exact=True).click();assert q.locator('#option-error').is_visible()
- q.locator('#option-name').fill('  vIaGeM  ');q.get_by_role('button',name='Salvar opção',exact=True).click()
- assert 'Já existe' in q.locator('#option-error').inner_text();q.locator('#option-cancel').click()
- period(q,10);add(q,'Viagem outubro','1,00',cat,label);assert total(q)==65321
- period(q,12);assert total(q)==0
- assert q.locator('#category-tabs').get_by_role('button',name='Viagem',exact=True).count()==1
- rename(q,'Viagem','Passeios');rename(q,'Pessoal','Casa',type='etiqueta')
- period(q,11);assert q.locator('#records').get_by_text('Passeios',exact=True).count()==1
- assert q.locator('#records').get_by_text('Casa',exact=True).count()==1
- assert q.locator('#label-filter').select_option(label)
- assert q.locator('#records tr').count()==1
- print('PASS: inline categories/labels, auto-selection, form preservation, blank/duplicate validation, global rename and label filter')
- # Delete custom category transferring across all months, then remove label links.
- q.get_by_role('button',name='Excluir categoria Passeios',exact=True).click();q.locator('#confirm-cancel').click()
- assert q.locator('#records').get_by_text('Passeios',exact=True).count()==1
- delete(q,'Passeios',target='flexible')
- assert total(q)==1234
- assert q.evaluate('currentRecords()[0].categoryId')=='flexible'
- period(q,10);assert total(q)==65321
- assert q.evaluate('currentRecords().at(-1).categoryId')=='flexible'
- q.locator('#manage-add-label').click();q.locator('#option-name').fill('  cAsA  ')
- q.get_by_role('button',name='Salvar opção',exact=True).click();assert 'Já existe' in q.locator('#option-error').inner_text()
- q.locator('#option-cancel').click()
- replacement=create_option(q,'Trabalho',type='label')
- delete(q,'Casa',target=replacement,type='etiqueta')
- assert q.evaluate('Object.values(state.invoices).flat().filter(r=>r.labelId!==null).every(r=>r.labelId==="'+replacement+'")')
- delete(q,'Trabalho',type='etiqueta')
- assert q.evaluate('Object.values(state.invoices).flat().every(r=>r.labelId===null)')
- # Delete seed category without transfer, preserves original values.
- delete(q,'Moisés')
- assert total(q)==65321
- assert q.evaluate('currentRecords().filter(r=>r.categoryId===null).length')==5
- q.locator('#category-tabs').get_by_role('button',name='Sem categoria',exact=True).click()
- assert q.locator('#records tr').count()==5
- assert q.locator('#filtered-total').inner_text()=='R$\xa0157,49'
- q.get_by_role('button',name='Renomear categoria Flexíveis',exact=True).click();q.locator('#option-name').fill(' Fixos ')
- q.get_by_role('button',name='Salvar opção',exact=True).click();assert 'Já existe' in q.locator('#option-error').inner_text()
- q.locator('#option-cancel').click()
- rename(q,'Flexíveis','Variáveis')
- assert q.locator('#category-tabs').get_by_role('button',name='Variáveis',exact=True).count()==1
- q.reload();assert total(q)==65321
- assert q.evaluate('state.categories.some(c=>c.name==="Variáveis")')
- period(q,11);assert total(q)==1234
- assert q.locator('#records').get_by_text('Variáveis',exact=True).count()==1
- print('PASS: cross-month category transfer, label unassignment, seed category deletion/rename, preserved totals and reload')
- # Calendar: before, on, after; clamp month end, leap year, January and DST.
- cases=[('2026-10',5,[2026,9,1],4,'near'),('2026-10',5,[2026,9,5],0,'today'),('2026-10',5,[2026,9,8],-3,'past'),('2026-10',5,[2026,8,5],30,'distant'),('2026-02',31,[2026,1,20],8,'distant'),('2028-02',31,[2028,1,29],0,'today'),('2027-01',5,[2026,11,31],5,'near'),('2026-03',5,[2026,2,1],4,'near')]
- for per,day,today,remaining,status in cases:
-  d=q.evaluate('''([period,day,parts])=>{const x=DueCalendar.calculate(period,day,new Date(...parts));return {...x,due:[x.due.getFullYear(),x.due.getMonth(),x.due.getDate()],previous:[x.previous.getFullYear(),x.previous.getMonth(),x.previous.getDate()]}}''',[per,day,today])
-  assert d['remaining']==remaining and d['status']==status,d
-  assert 0<=d['progress']<=100
-  if remaining<=0:assert d['progress']==100
-  if per=='2026-02':assert d['due']==[2026,1,28] and d['previous']==[2026,0,31]
- assert q.evaluate('DueCalendar.calculate("2026-10",5,new Date(2026,9,1)).progress')>q.evaluate('DueCalendar.calculate("2026-10",5,new Date(2026,8,15)).progress')
- q.locator('#due-day').fill('32');q.get_by_role('button',name='Salvar vencimento',exact=True).click();assert q.locator('#due-error').is_visible()
- q.locator('#due-day').fill('31');q.get_by_role('button',name='Salvar vencimento',exact=True).click()
- period(q,2);assert q.locator('#due-date').inner_text()=='28/02/2026'
- q.reload();assert q.locator('#due-day').input_value()=='31'
- assert q.locator('#due-date').inner_text()=='28/02/2026'
- # Control the actual UI clock as well as pure calculation.
- q.clock.install(time=__import__('datetime').datetime(2026,10,5,15))
- period(q,10);q.locator('#due-day').fill('5');q.get_by_role('button',name='Salvar vencimento',exact=True).click()
- assert q.locator('#due-message').inner_text()=='Vence hoje'
- assert q.locator('#due-progress').get_attribute('aria-valuenow')=='100'
- q.clock.set_system_time(__import__('datetime').datetime(2026,10,8,15));q.evaluate('renderDue()')
- assert q.locator('#due-message').inner_text()=='Vencimento há 3 dias'
- q.clock.set_system_time(__import__('datetime').datetime(2026,10,1,15));q.evaluate('renderDue()')
- assert q.locator('#due-message').inner_text()=='Faltam 4 dias'
- print('PASS: calendar before/on/after due date, progress, month-end clamp, leap year, January, global day preference, actual UI clock')
- # Restore only October, not November. Does not undo global names/settings.
- q.locator('#restore-source').click();q.locator('#confirm-ok').click();assert total(q)==65221
- assert q.evaluate('state.categories.some(c=>c.name==="Variáveis")')
- period(q,11);assert total(q)==1234
- # Mobile screenshot and controls.
- q.set_viewport_size({'width':390,'height':844})
- assert q.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
- q.locator('#add-record').click();assert q.locator('#record-dialog').is_visible()
- q.locator('#create-category').click();q.locator('#option-name').fill('Celular');q.get_by_role('button',name='Salvar opção',exact=True).click()
- assert q.locator('#record-dialog').is_visible()
- assert q.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
- q.keyboard.press('Escape');assert not q.locator('#record-dialog').is_visible()
- q.set_viewport_size({'width':1440,'height':1050});period(q,10)
- q.locator('#clear-data').click();q.locator('#confirm-cancel').click();assert total(q)==65221
- q.locator('#clear-data').click();q.locator('#confirm-ok').click();q.reload()
- assert total(q)==0
- period(q,11);assert total(q)==0
- assert q.evaluate('state.categories.some(c=>c.name==="Celular")')
- print('PASS: restore October only, mobile dialogs/layout, clear all months preserves global settings and persists')
- # Removing every seed category still preserves all records and permits unassigned entries.
- fresh=b.new_context(viewport={'width':390,'height':844},timezone_id='America/Sao_Paulo')
- other=fresh.new_page();other.goto(BASE)
- for name in ['Fixos','Flexíveis','Moisés']:delete(other,name)
- assert total(other)==65221 and other.locator('#records tr').count()==33
- assert other.evaluate('currentRecords().every(r=>r.categoryId===null)')
- other.reload();assert total(other)==65221 and other.evaluate('state.categories.length')==0
- add(other,'Sem classificação','0,20',category='')
- assert total(other)==65241
- assert other.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
- # Simulate unavailable writes and preserve in-session data while showing the warning.
- other.evaluate('() => {Storage.prototype.setItem=function(){throw new DOMException("quota", "QuotaExceededError")}}')
- add(other,'Somente na sessão','0,10',category='')
- assert total(other)==65251 and other.locator('#storage-warning').is_visible()
- fresh.close()
- print('PASS: removal of all categories preserves records, unassigned entries work, unavailable storage is reported')
- # Legacy migration modified under an arbitrary old period.
- legacy={'version':1,'period':'2027-02','records':[{'id':'user-1','description':'Minha edição','group':'flexible','cents':12345},{'id':'user-2','description':'Pendente','group':'moises','cents':None}]}
- q.evaluate('([key,data])=>{localStorage.removeItem("v3go.invoice.v2");localStorage.setItem(key,JSON.stringify(data))}', ['v3go.invoice.v1',legacy]);q.reload()
- assert q.evaluate('state.period')=='2026-10' and total(q)==12345
- assert q.locator('#records tr').count()==2
- assert json.loads(q.evaluate('localStorage.getItem("v3go.invoice.v1")'))==legacy
- period(q,2,2027);assert total(q)==0
- q.reload();assert total(q)==0
- period(q,10);assert total(q)==12345
- # Empty old state must stay empty.
- legacy['records']=[]
- q.evaluate('data=>{localStorage.removeItem("v3go.invoice.v2");localStorage.setItem("v3go.invoice.v1",JSON.stringify(data))}',legacy);q.reload();assert total(q)==0
- print('PASS: legacy migration preserves edits and blanks, ignores old period, retains legacy backup, no repeated migration, preserves intentionally empty base')
- q.evaluate('localStorage.setItem("v3go.invoice.v2","bad-json")');q.reload()
- assert q.locator('#storage-warning').is_visible()
- assert q.evaluate('localStorage.getItem("v3go.invoice.v2")')=='bad-json'
- q.locator('#restore-source').click();q.locator('#confirm-ok').click();assert total(q)==65221
- assert not q.locator('#storage-warning').is_visible()
- assert not errors,errors
- print('PASS: invalid saved data protected until confirmed reset; no JavaScript runtime errors')
- b.close()
+
+def total(page):
+    return page.evaluate("InvoiceMath.calculate(currentRecords(), state.categories).total")
+
+
+def custom_total(page):
+    return page.evaluate("InvoiceMath.selectedTotal(currentRecords(), customSelection)")
+
+
+def period(page, month, year=2026):
+    page.locator("#period-year").fill(str(year))
+    page.locator("#period-year").dispatch_event("change")
+    page.locator("#period-month").select_option(f"{month:02d}")
+
+
+def add(page, description, value, category="fixed", label=""):
+    page.locator("#add-record").click()
+    page.locator("#description").fill(description)
+    page.locator("#value").fill(value)
+    page.locator("#group").select_option(category)
+    page.locator("#record-label").select_option(label)
+    page.get_by_role("button", name="Salvar lançamento", exact=True).click()
+
+
+def create(page, name, kind="category", inline=False):
+    page.locator(f"#{'create' if inline else 'manage-add'}-{kind}").click()
+    page.locator("#option-name").fill(name)
+    page.get_by_role("button", name="Salvar opção", exact=True).click()
+    options = "categories" if kind == "category" else "labels"
+    return page.evaluate("([type,name]) => state[type].find(x => x.name === name).id", [options, name])
+
+
+def rename(page, name, new_name, kind="categoria"):
+    page.get_by_role("button", name=f"Renomear {kind} {name}", exact=True).click()
+    page.locator("#option-name").fill(new_name)
+    page.get_by_role("button", name="Salvar opção", exact=True).click()
+
+
+def delete(page, name, target="", kind="categoria"):
+    page.get_by_role("button", name=f"Excluir {kind} {name}", exact=True).click()
+    if page.locator("#transfer-field").is_visible():
+        page.locator("#transfer-option").select_option(target)
+    page.locator("#confirm-ok").click()
+
+
+with sync_playwright() as playwright:
+    browser = playwright.chromium.launch(executable_path=shutil.which("chromium"), headless=True, args=["--no-sandbox"])
+    context = browser.new_context(viewport={"width": 1440, "height": 1050}, timezone_id="America/Sao_Paulo")
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(URL)
+    assert page.evaluate("state.version") == 3
+    for year in (2026, 2027):
+        for month in range(1, 13):
+            period(page, month, year)
+            assert total(page) == 0 and page.locator("#records tr").count() == 0
+            assert page.locator(".category-summary").count() == 3
+            assert page.locator("#due-message").inner_text() != "Fatura paga"
+    page.reload()
+    assert total(page) == 0
+    assert page.evaluate("Object.values(state.invoices).flat().length") == 0
+    assert page.evaluate("InvoiceMath.sum([{cents:10},{cents:20}])") == 30
+    assert page.evaluate("currency(9007199254740991)") == "R$\xa090.071.992.547.409,91"
+    assert page.evaluate('InvoiceMath.parseMoney("90071992547409,91")') == 9007199254740991
+    print("PASS: new base empty for all months in two years, reload, exact cents")
+
+    period(page, 10)
+    add(page, "Registro de teste A", "10,10")
+    add(page, "Registro de teste B", "20,20", "flexible")
+    add(page, "Registro de teste C", "3,30", "")
+    add(page, "Registro sem valor", "", "moises")
+    assert total(page) == 3360
+    assert page.locator("#combined-total").inner_text() == page.locator("#total").inner_text()
+    assert page.locator("#combined-label").inner_text() == "Fixos + Flexíveis + Moisés + Sem categoria"
+    page.locator("#sum-categories").click()
+    assert custom_total(page) == 3360
+    assert page.locator("#sum-options input:checked").count() == 4
+    page.locator("#sum-none").click()
+    assert custom_total(page) == 0
+    assert page.locator("#custom-total").inner_text() == "R$\xa00,00"
+    page.locator('[data-sum-category="fixed"]').check()
+    assert custom_total(page) == 1010
+    assert page.locator("#custom-expression").inner_text() == "Fixos"
+    assert total(page) == 3360
+    page.locator('[data-sum-category="uncategorized"]').check()
+    assert custom_total(page) == 1340
+    page.locator("#sum-all").click()
+    assert custom_total(page) == 3360
+    page.locator("#close-sum").click()
+    page.locator("#sum-categories").click()
+    assert page.locator("#sum-options input:checked").count() == 4
+    print("PASS: dynamic composition, unassigned entries, empty values, custom selections, all/none and reopening defaults")
+
+    page.locator("#sum-none").click()
+    page.locator('[data-sum-category="fixed"]').check()
+    period(page, 11)
+    assert total(page) == 0 and custom_total(page) == 0
+    add(page, "Novembro teste", "5,50")
+    assert total(page) == 550 and custom_total(page) == 550
+    period(page, 10)
+    assert total(page) == 3360 and custom_total(page) == 1010
+    page.locator("#records tr").first.locator("[data-action=edit]").click()
+    page.locator("#value").fill("11,11")
+    page.get_by_role("button", name="Salvar lançamento", exact=True).click()
+    assert total(page) == 3461 and custom_total(page) == 1111
+    period(page, 11)
+    assert total(page) == 550
+    page.locator("#records tr").first.locator("[data-action=delete]").click()
+    page.locator("#confirm-cancel").click()
+    assert total(page) == 550
+    page.locator("#records tr").first.locator("[data-action=delete]").click()
+    page.locator("#confirm-ok").click()
+    assert total(page) == 0 and custom_total(page) == 0
+    period(page, 10)
+    assert total(page) == 3461
+    print("PASS: custom result responds to month changes and CRUD; monthly data remains isolated")
+
+    # Actual UI calendar, confirmed payment, undo, year isolation and persistence.
+    page.clock.install(time=datetime(2026, 10, 11, 15))
+    page.evaluate("renderDue()")
+    assert page.locator("#due-message").inner_text() == "Vencimento há 6 dias"
+    records_before = page.evaluate("JSON.stringify(state.invoices)")
+    interval_before = page.locator("#due-interval").inner_text()
+    page.locator("#toggle-payment").click()
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    assert page.locator("#due-message").get_attribute("data-status") == "paid"
+    assert page.locator("#due-progress").get_attribute("aria-valuenow") == "100"
+    assert page.locator("#due-progress").get_attribute("data-status") == "paid"
+    assert page.locator("#due-interval").inner_text() == interval_before
+    assert page.locator("#due-date").inner_text() == "05/10/2026"
+    assert page.evaluate("JSON.stringify(state.invoices)") == records_before
+    page.locator("#sum-none").click()
+    assert custom_total(page) == 0 and total(page) == 3461
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    page.reload()
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    period(page, 11)
+    assert page.locator("#due-message").inner_text() != "Fatura paga"
+    period(page, 10, 2027)
+    assert page.locator("#due-message").inner_text() != "Fatura paga"
+    period(page, 10)
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    page.get_by_role("button", name="Marcar como não paga", exact=True).click()
+    assert page.locator("#due-message").inner_text() == "Vencimento há 6 dias"
+    page.clock.set_system_time(datetime(2026, 10, 1, 15))
+    page.evaluate("renderDue()")
+    expected_progress = page.locator("#due-progress").get_attribute("aria-valuenow")
+    assert page.locator("#due-message").inner_text() == "Faltam 4 dias"
+    page.locator("#toggle-payment").click()
+    page.locator("#toggle-payment").click()
+    assert page.locator("#due-message").inner_text() == "Faltam 4 dias"
+    assert page.locator("#due-progress").get_attribute("aria-valuenow") == expected_progress
+    page.clock.set_system_time(datetime(2026, 10, 5, 15))
+    page.evaluate("renderDue()")
+    assert page.locator("#due-message").inner_text() == "Vence hoje"
+    page.locator("#toggle-payment").click()
+    add(page, "Registro após pagamento", "0,10")
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    print("PASS: payment/undo before, on and after due date; independent months/years, unchanged values and reload persistence")
+
+    # Inline options, duplicates, renames, transfers; queries/payment stay intact.
+    page.locator("#sum-categories").click()
+    page.locator("#add-record").click()
+    page.locator("#description").fill("Categoria no formulário")
+    page.locator("#value").fill("7,70")
+    transport = create(page, "Transporte", inline=True)
+    assert page.locator("#group").input_value() == transport
+    assert page.locator("#description").input_value() == "Categoria no formulário"
+    label = create(page, "Etiqueta teste", kind="label", inline=True)
+    assert page.locator("#record-label").input_value() == label
+    page.get_by_role("button", name="Salvar lançamento", exact=True).click()
+    assert total(page) == 4241
+    assert "Transporte" in page.locator("#combined-label").inner_text()
+    assert custom_total(page) == 4241
+    page.locator("#sum-none").click()
+    page.locator('[data-sum-category="fixed"]').check()
+    page.locator(f'[data-sum-category="{transport}"]').check()
+    assert custom_total(page) == 1891 and total(page) == 4241
+    assert page.locator("#custom-expression").inner_text() == "Fixos + Transporte"
+    rename(page, "Transporte", "Mobilidade")
+    assert page.locator("#custom-expression").inner_text() == "Fixos + Mobilidade"
+    assert "Mobilidade" in page.locator("#combined-label").inner_text()
+    page.locator("#manage-add-category").click()
+    page.locator("#option-name").fill("  mObILiDaDe  ")
+    page.get_by_role("button", name="Salvar opção", exact=True).click()
+    assert "Já existe" in page.locator("#option-error").inner_text()
+    page.locator("#option-cancel").click()
+    rename(page, "Etiqueta teste", "Etiqueta renomeada", kind="etiqueta")
+    page.locator("#label-filter").select_option(label)
+    assert page.locator("#records tr").count() == 1
+    delete(page, "Etiqueta renomeada", kind="etiqueta")
+    delete(page, "Mobilidade", target="flexible")
+    assert total(page) == 4241
+    assert "Mobilidade" not in page.locator("#combined-label").inner_text()
+    assert custom_total(page) == 1121
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    delete(page, "Moisés")
+    page.locator("#sum-all").click()
+    assert custom_total(page) == total(page)
+    assert page.evaluate("currentRecords().filter(x=>x.categoryId===null).length") == 2
+    print("PASS: dynamic options/composition/query after creation, rename/deletion, transfer, duplicate validation, labels and unchanged payment")
+
+    # Calendar edge cases remain valid.
+    cases = [("2026-02", 31, [2026, 1, 20], 8), ("2028-02", 31, [2028, 1, 29], 0), ("2027-01", 5, [2026, 11, 31], 5)]
+    for invoice_period, day, date, remaining in cases:
+        result = page.evaluate("([p,d,t])=>{const r=DueCalendar.calculate(p,d,new Date(...t));return {remaining:r.remaining,progress:r.progress}}", [invoice_period, day, date])
+        assert result["remaining"] == remaining and 0 <= result["progress"] <= 100
+    page.locator("#due-day").fill("31")
+    page.get_by_role("button", name="Salvar vencimento", exact=True).click()
+    period(page, 2)
+    assert page.locator("#due-date").inner_text() == "28/02/2026"
+    assert total(page) == 0 and custom_total(page) == 0
+    period(page, 10)
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    page.reload()
+    assert page.locator("#due-day").input_value() == "31" and total(page) == 4241
+
+    # Mobile and many categories; panel result is below its options.
+    for index in range(6):
+        create(page, f"Categoria extra de teste {index}")
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.locator("#sum-categories").click()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert page.locator(".custom-result").bounding_box()["y"] >= page.locator(".sum-fieldset").bounding_box()["y"] + page.locator(".sum-fieldset").bounding_box()["height"]
+    page.locator("#sum-none").click()
+    assert custom_total(page) == 0
+    page.locator("#sum-all").click()
+    assert custom_total(page) == total(page)
+    page.locator("#add-record").click()
+    page.keyboard.press("Escape")
+    assert not page.locator("#record-dialog").is_visible()
+    page.locator("#toggle-payment").click()
+    assert page.locator("#due-message").inner_text() != "Fatura paga"
+    page.locator("#toggle-payment").click()
+    page.reload()
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    print("PASS: calendar edges, configurable due day, mobile with many categories, result below selection and mobile payment persistence")
+
+    # Migrate v2 preserving every month, names, labels, preferences and records exactly.
+    saved = page.evaluate("JSON.parse(JSON.stringify(state))")
+    previous = {key: value for key, value in saved.items() if key != "payments"}
+    previous["version"] = 2
+    previous["labels"].append({"id": "label-saved-test", "name": "Etiqueta salva de teste"})
+    previous["invoices"]["2026-11"] = [{"id": "saved-other-month", "description": "Registro fictício de outro mês", "categoryId": None, "labelId": "label-saved-test", "cents": 500}]
+    page.evaluate("data=>{localStorage.removeItem('v3go.invoice.v3');localStorage.setItem('v3go.invoice.v2',JSON.stringify(data))}", previous)
+    page.reload()
+    assert page.evaluate("state.invoices") == previous["invoices"]
+    assert page.evaluate("state.categories") == previous["categories"]
+    assert page.evaluate("state.labels") == previous["labels"]
+    assert page.evaluate("state.period") == previous["period"]
+    assert page.evaluate("state.dueDay") == previous["dueDay"]
+    assert total(page) == 4241 and page.locator("#due-message").inner_text() != "Fatura paga"
+    assert json.loads(page.evaluate("localStorage.getItem('v3go.invoice.v2')")) == previous
+    page.reload()
+    assert total(page) == 4241
+    period(page, 11)
+    assert total(page) == 500
+    assert page.locator("#records").get_by_text("Etiqueta salva de teste", exact=True).count() == 1
+    period(page, 10)
+    assert total(page) == 4241
+    # Single-list v1 migration keeps original edits in their established October mapping.
+    legacy = {"version": 1, "period": "2027-02", "records": [{"id": "test-v1", "description": "Registro fictício legado", "group": "flexible", "cents": 12345}]}
+    page.evaluate("data=>{localStorage.removeItem('v3go.invoice.v3');localStorage.removeItem('v3go.invoice.v2');localStorage.setItem('v3go.invoice.v1',JSON.stringify(data))}", legacy)
+    page.reload()
+    assert page.evaluate("state.period") == "2026-10" and total(page) == 12345
+    period(page, 2, 2027)
+    assert total(page) == 0
+    period(page, 10)
+    page.locator("#clear-data").click()
+    page.locator("#confirm-cancel").click()
+    assert total(page) == 12345
+    page.locator("#clear-data").click()
+    page.locator("#confirm-ok").click()
+    page.reload()
+    assert total(page) == 0  # Does not reimport retained legacy backups.
+    page.evaluate("localStorage.setItem('v3go.invoice.v3', 'bad-json')")
+    page.reload()
+    assert page.locator("#storage-warning").is_visible()
+    assert page.evaluate("localStorage.getItem('v3go.invoice.v3')") == "bad-json"
+    assert total(page) == 0
+    page.locator("#clear-data").click()
+    page.locator("#confirm-ok").click()
+    assert not page.locator("#storage-warning").is_visible()
+    assert not errors, errors
+    print("PASS: v2/v1 migrations preserve saved data, backups intact, explicit clear, corrupt data protected, no runtime errors")
+    browser.close()

@@ -1,207 +1,5 @@
 "use strict";
 
-// Dados reais de Planilha1. Valores em centavos; null preserva células vazias.
-const SOURCE_RECORDS = [
-  {
-    "id": "source-fixed-7",
-    "description": "Amazon Martkeplace 12/12",
-    "group": "fixed",
-    "cents": 7374
-  },
-  {
-    "id": "source-fixed-8",
-    "description": "Amazon",
-    "group": "fixed",
-    "cents": 4999
-  },
-  {
-    "id": "source-fixed-9",
-    "description": "Mp*Ptisk",
-    "group": "fixed",
-    "cents": 5699
-  },
-  {
-    "id": "source-fixed-10",
-    "description": "Amazon * Btcgvarej",
-    "group": "fixed",
-    "cents": 5390
-  },
-  {
-    "id": "source-fixed-11",
-    "description": "Nitro Discord",
-    "group": "fixed",
-    "cents": 2607
-  },
-  {
-    "id": "source-fixed-12",
-    "description": "99Food",
-    "group": "fixed",
-    "cents": 3742
-  },
-  {
-    "id": "source-fixed-13",
-    "description": "JimCom",
-    "group": "fixed",
-    "cents": 3800
-  },
-  {
-    "id": "source-fixed-14",
-    "description": "Claro Flex",
-    "group": "fixed",
-    "cents": 3999
-  },
-  {
-    "id": "source-flexible-7",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 633
-  },
-  {
-    "id": "source-flexible-8",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 393
-  },
-  {
-    "id": "source-flexible-9",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 491
-  },
-  {
-    "id": "source-flexible-10",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 891
-  },
-  {
-    "id": "source-flexible-11",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 590
-  },
-  {
-    "id": "source-flexible-12",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 416
-  },
-  {
-    "id": "source-flexible-13",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 491
-  },
-  {
-    "id": "source-flexible-14",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 491
-  },
-  {
-    "id": "source-flexible-15",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 300
-  },
-  {
-    "id": "source-flexible-16",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 590
-  },
-  {
-    "id": "source-flexible-17",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 491
-  },
-  {
-    "id": "source-flexible-18",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 492
-  },
-  {
-    "id": "source-flexible-19",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 490
-  },
-  {
-    "id": "source-flexible-20",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 491
-  },
-  {
-    "id": "source-flexible-21",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 491
-  },
-  {
-    "id": "source-flexible-22",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 691
-  },
-  {
-    "id": "source-flexible-23",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 490
-  },
-  {
-    "id": "source-flexible-24",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 2257
-  },
-  {
-    "id": "source-flexible-25",
-    "description": "DI * Uberrides",
-    "group": "flexible",
-    "cents": 592
-  },
-  {
-    "id": "source-flexible-26",
-    "description": "Iof",
-    "group": "flexible",
-    "cents": 91
-  },
-  {
-    "id": "source-moises-6",
-    "description": "Shopee * TechTudo",
-    "group": "moises",
-    "cents": 4899
-  },
-  {
-    "id": "source-moises-7",
-    "description": "Shopee * Docegarimpodec",
-    "group": "moises",
-    "cents": 3500
-  },
-  {
-    "id": "source-moises-8",
-    "description": "Shopee * Brinka Festa Sh 1/2",
-    "group": "moises",
-    "cents": 2351
-  },
-  {
-    "id": "source-moises-9",
-    "description": "Shopee * Casa e Decoracao",
-    "group": "moises",
-    "cents": 4999
-  },
-  {
-    "id": "source-moises-10",
-    "description": "Mochila",
-    "group": "moises",
-    "cents": null
-  }
-];
-
 // Lógica financeira: independente da interface e do armazenamento.
 const InvoiceMath = Object.freeze({
   parseMoney(text) {
@@ -224,17 +22,21 @@ const InvoiceMath = Object.freeze({
       return result;
     }, 0);
   },
+  selectedTotal(records, categoryIds) {
+    return this.sum(records.filter(record => categoryIds.has(record.categoryId ?? "uncategorized")));
+  },
   calculate(records, categories = []) {
     const groups = Object.create(null);
     for (const category of [...categories, { id: "uncategorized" }]) {
       groups[category.id] = this.sum(records.filter(record => (record.categoryId ?? "uncategorized") === category.id));
     }
-    return { groups, total: this.sum(records), combined: this.sum(records.filter(record => ["fixed", "flexible"].includes(record.categoryId))) };
+    return { groups, total: this.sum(records) };
   }
 });
 
 const $ = id => document.getElementById(id);
-const STORAGE_KEY = "v3go.invoice.v2";
+const STORAGE_KEY = "v3go.invoice.v3";
+const PREVIOUS_KEY = "v3go.invoice.v2";
 const LEGACY_KEY = "v3go.invoice.v1";
 const BASE_PERIOD = "2026-10";
 const DEFAULT_CATEGORIES = [
@@ -258,7 +60,7 @@ const compareName = name => normalizeName(name).normalize("NFD").replace(/[\u030
 const validPeriod = period => typeof period === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(period) && Number(period.slice(0, 4)) >= 1;
 const newId = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const importRecord = record => ({ id: record.id, description: record.description, categoryId: record.group, labelId: null, cents: record.cents });
-const sourceState = () => ({ version: 2, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: { [BASE_PERIOD]: SOURCE_RECORDS.map(importRecord) } });
+const emptyState = () => ({ version: 3, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {} });
 
 // Datas locais: diferenças de dias civis evitam erros de horário de verão.
 const DueCalendar = Object.freeze({
@@ -305,7 +107,7 @@ function validateOptions(options, type) {
   });
 }
 function validateState(data) {
-  if (!data || data.version !== 2 || !validPeriod(data.period) || !Number.isInteger(data.dueDay) || data.dueDay < 1 || data.dueDay > 31 ||
+  if (!data || data.version !== 3 || !validPeriod(data.period) || !Number.isInteger(data.dueDay) || data.dueDay < 1 || data.dueDay > 31 ||
       !data.invoices || typeof data.invoices !== "object" || Array.isArray(data.invoices)) throw new Error("Dados salvos inválidos.");
   const categories = validateOptions(data.categories, "categories");
   const labels = validateOptions(data.labels, "labels");
@@ -324,11 +126,17 @@ function validateState(data) {
     });
     InvoiceMath.calculate(invoices[period], categories);
   }
-  return { version: 2, period: data.period, dueDay: data.dueDay, categories, labels, invoices };
+  if (!data.payments || typeof data.payments !== "object" || Array.isArray(data.payments)) throw new Error("Status de pagamento inválidos.");
+  const payments = {};
+  for (const [period, paid] of Object.entries(data.payments)) {
+    if (!validPeriod(period) || typeof paid !== "boolean") throw new Error("Status de pagamento inválido.");
+    payments[period] = paid;
+  }
+  return { version: 3, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments };
 }
 function migrateLegacy(data) {
   if (!data || data.version !== 1 || !validPeriod(data.period) || !Array.isArray(data.records)) throw new Error("Base antiga inválida.");
-  const migrated = sourceState();
+  const migrated = emptyState();
   // A versão anterior tinha só uma lista compartilhada, não históricos mensais.
   migrated.invoices[BASE_PERIOD] = data.records.map(record => {
     if (!record || !DEFAULT_CATEGORIES.some(category => category.id === record.group)) throw new Error("Categoria antiga inválida.");
@@ -347,17 +155,25 @@ function loadState() {
   try {
     const current = localStorage.getItem(STORAGE_KEY);
     if (current !== null) return validateState(JSON.parse(current));
+    const previous = localStorage.getItem(PREVIOUS_KEY);
+    if (previous !== null) {
+      const data = JSON.parse(previous);
+      if (!data || data.version !== 2) throw new Error("Base anterior inválida.");
+      const migrated = validateState({ ...data, version: 3, payments: data.payments ?? {} });
+      migrationApplied = true;
+      return migrated;
+    }
     const legacy = localStorage.getItem(LEGACY_KEY);
     if (legacy !== null) {
       const migrated = migrateLegacy(JSON.parse(legacy));
       migrationApplied = true;
       return migrated;
     }
-    return sourceState();
+    return emptyState();
   } catch (error) {
     storageBlocked = true;
-    storageWarning("Não foi possível ler os dados salvos. A base original está visível apenas nesta sessão. O salvamento está suspenso para preservar os dados existentes. “Restaurar base em outubro de 2026” ou “Apagar dados salvos” permite redefinir a base com confirmação.");
-    return sourceState();
+    storageWarning("Não foi possível ler os dados salvos. Uma base vazia está visível apenas nesta sessão. O salvamento está suspenso para preservar os dados existentes. “Apagar dados salvos” permite redefinir o armazenamento com confirmação.");
+    return emptyState();
   }
 }
 let state = loadState();
@@ -368,6 +184,8 @@ let editingPeriod = null;
 let optionEditor = null;
 let confirmationAction = null;
 let toastTimer;
+let customSelection = new Set();
+let customAvailable = new Set();
 const currentRecords = () => state.invoices[state.period] ?? [];
 const optionName = (type, id) => state[type].find(option => option.id === id)?.name ?? (type === "categories" ? "Sem categoria" : "Sem etiqueta");
 const categoryColor = id => state.categories.find(category => category.id === id)?.color ?? "#8e8998";
@@ -460,12 +278,19 @@ function renderDue() {
   const info = DueCalendar.calculate(state.period, state.dueDay);
   const format = date => new Intl.DateTimeFormat("pt-BR").format(date);
   $("due-date").textContent = format(info.due);
-  $("due-message").textContent = info.message;
-  $("due-message").dataset.status = info.status;
-  $("due-progress").dataset.status = info.status;
-  $("due-progress").setAttribute("aria-valuenow", String(Math.round(info.progress)));
-  $("due-progress").setAttribute("aria-valuetext", `${info.message}. ${Math.round(info.progress)}% do intervalo entre vencimentos.`);
-  $("due-fill").style.width = `${info.progress}%`;
+  const paid = state.payments[state.period] === true;
+  const message = paid ? "Fatura paga" : info.message;
+  const status = paid ? "paid" : info.status;
+  const progress = paid ? 100 : info.progress;
+  $("due-message").textContent = message;
+  $("due-message").dataset.status = status;
+  $("due-progress").dataset.status = status;
+  $("due-progress").setAttribute("aria-valuenow", String(Math.round(progress)));
+  $("due-progress").setAttribute("aria-valuetext", paid ? "Fatura paga. Pagamento confirmado pelo usuário." : `${message}. ${Math.round(progress)}% do intervalo entre vencimentos.`);
+  $("due-progress").setAttribute("aria-label", paid ? "Estado de pagamento da fatura" : "Proximidade do vencimento");
+  $("due-fill").style.width = `${progress}%`;
+  $("toggle-payment").textContent = paid ? "Marcar como não paga" : "Marcar como paga";
+  $("toggle-payment").setAttribute("aria-pressed", String(paid));
   $("due-interval").textContent = `Intervalo: ${format(info.previous)} → ${format(info.due)}`;
 }
 function renderManagement() {
@@ -550,11 +375,8 @@ function render() {
   }
   $("composition-bar").hidden = !showDistribution;
   $("composition-note").textContent = showDistribution ? "Todos os lançamentos deste mês compõem o total." : "Valores somados acima. A distribuição visual exige total positivo e subtotais não negativos.";
-  const fixed = state.categories.find(category => category.id === "fixed");
-  const flexible = state.categories.find(category => category.id === "flexible");
-  $("combined-row").hidden = !fixed || !flexible;
-  if (fixed && flexible) $("combined-label").textContent = `${fixed.name} + ${flexible.name}`;
-  $("combined-total").textContent = currency(totals.combined);
+  $("combined-label").textContent = categories.length ? categories.map(category => category.name).join(" + ") : "Nenhuma categoria cadastrada";
+  $("combined-total").textContent = currency(totals.total);
   if (selectedCategory !== "all" && selectedCategory !== "none" && !state.categories.some(category => category.id === selectedCategory)) selectedCategory = "all";
   if (selectedLabel !== "all" && selectedLabel !== "" && !state.labels.some(label => label.id === selectedLabel)) selectedLabel = "all";
   $("category-tabs").replaceChildren();
@@ -582,6 +404,7 @@ function render() {
   renderFormOptions();
   renderManagement();
   renderDue();
+  renderCustomSum();
 }
 function openRecord(record = null) {
   editingId = record?.id ?? null;
@@ -641,6 +464,88 @@ function deleteOption(type, id) {
     if (saved) notify(`${singular === "categoria" ? "Categoria" : "Etiqueta"} excluída. Lançamentos preservados.`);
   }, count ? { options: state[type].filter(item => item.id !== id), emptyLabel: type === "categories" ? "Sem categoria" : "Sem etiqueta" } : null);
 }
+// Consulta temporária: a seleção não faz parte dos dados financeiros persistidos.
+function availableSumCategories() {
+  const categories = [...state.categories];
+  if (currentRecords().some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
+  return categories;
+}
+function renderCustomResult() {
+  const categories = availableSumCategories();
+  $("custom-period").textContent = periodLabel(state.period);
+  try {
+    $("custom-total").textContent = currency(InvoiceMath.selectedTotal(currentRecords(), customSelection));
+    $("custom-error").hidden = true;
+  } catch (error) {
+    $("custom-total").textContent = "—";
+    $("custom-error").textContent = error.message;
+    $("custom-error").hidden = false;
+  }
+  const chosen = categories.filter(category => customSelection.has(category.id));
+  $("custom-expression").textContent = chosen.length ? chosen.map(category => category.name).join(" + ") : "Nenhuma categoria selecionada";
+}
+function renderCustomSum() {
+  if ($("custom-panel").hidden) return;
+  const categories = availableSumCategories();
+  const available = new Set(categories.map(category => category.id));
+  for (const id of available) if (!customAvailable.has(id)) customSelection.add(id);
+  // “Sem categoria” pode desaparecer em um mês vazio e reaparecer em outro.
+  // Preserve a escolha enquanto a consulta está aberta, sem selecioná-la de novo.
+  const registered = new Set([...state.categories.map(category => category.id), "uncategorized"]);
+  for (const id of customSelection) if (!registered.has(id)) customSelection.delete(id);
+  customAvailable = new Set([...customAvailable, ...available].filter(id => registered.has(id)));
+  const focusedId = document.activeElement?.dataset.sumCategory;
+  $("sum-options").replaceChildren();
+  const totals = InvoiceMath.calculate(currentRecords(), state.categories);
+  for (const category of categories) {
+    const label = document.createElement("label");
+    label.className = "sum-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.sumCategory = category.id;
+    checkbox.checked = customSelection.has(category.id);
+    const name = document.createElement("span");
+    name.textContent = category.name;
+    const subtotal = document.createElement("strong");
+    subtotal.textContent = currency(totals.groups[category.id]);
+    label.append(checkbox, name, subtotal);
+    $("sum-options").append(label);
+    if (category.id === focusedId) checkbox.focus();
+  }
+  $("sum-empty").hidden = categories.length > 0;
+  renderCustomResult();
+}
+$("toggle-payment").addEventListener("click", () => {
+  state.payments[state.period] = state.payments[state.period] !== true;
+  const saved = saveState();
+  renderDue();
+  if (saved) notify(state.payments[state.period] ? "Fatura deste mês marcada como paga." : "Marcação de pagamento desfeita para este mês.");
+});
+$("sum-categories").addEventListener("click", () => {
+  customAvailable = new Set(availableSumCategories().map(category => category.id));
+  customSelection = new Set(customAvailable);
+  $("custom-panel").hidden = false;
+  $("sum-categories").setAttribute("aria-expanded", "true");
+  renderCustomSum();
+  $("custom-panel").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
+  $("custom-title").focus({ preventScroll: true });
+});
+$("close-sum").addEventListener("click", () => {
+  $("custom-panel").hidden = true;
+  $("sum-categories").setAttribute("aria-expanded", "false");
+  $("sum-categories").focus();
+});
+$("sum-options").addEventListener("change", event => {
+  const checkbox = event.target.closest("input[data-sum-category]");
+  if (!checkbox) return;
+  if (checkbox.checked) customSelection.add(checkbox.dataset.sumCategory);
+  else customSelection.delete(checkbox.dataset.sumCategory);
+  renderCustomResult();
+});
+for (const [id, select] of [["sum-all", true], ["sum-none", false]]) $(id).addEventListener("click", () => {
+  customSelection = select ? new Set(availableSumCategories().map(category => category.id)) : new Set();
+  renderCustomSum();
+});
 MONTHS.forEach((name, index) => {
   const option = document.createElement("option");
   option.value = String(index + 1).padStart(2, "0");
@@ -781,35 +686,20 @@ $("confirm-ok").addEventListener("click", () => {
   action?.();
 });
 $("confirm-dialog").addEventListener("cancel", () => { confirmationAction = null; });
-$("restore-source").addEventListener("click", () => confirmAction("Restaurar base em outubro?", `Os lançamentos de outubro de 2026 serão substituídos pelos 33 registros originais. Outros meses e suas configurações serão preservados.${storageBlocked ? " Os dados ilegíveis serão redefinidos após esta confirmação." : ""}`, "Restaurar base", () => {
-  if (storageBlocked) state = sourceState();
-  const mapping = {};
-  for (const category of DEFAULT_CATEGORIES) {
-    let existing = state.categories.find(item => item.id === category.id) ?? state.categories.find(item => compareName(item.name) === compareName(category.name));
-    if (!existing) { existing = { ...category }; state.categories.push(existing); }
-    mapping[category.id] = existing.id;
-  }
-  state.invoices[BASE_PERIOD] = SOURCE_RECORDS.map(record => ({ ...importRecord(record), categoryId: mapping[record.group] }));
-  state.period = BASE_PERIOD;
-  storageBlocked = false;
-  const saved = saveState();
-  resetFilters();
-  render();
-  if (saved) notify("Base restaurada em outubro de 2026.");
-}));
-$("clear-data").addEventListener("click", () => confirmAction("Apagar os dados salvos?", `Todos os lançamentos de TODOS os meses serão apagados. Categorias, etiquetas e dia de vencimento serão preservados.${storageBlocked ? " Os dados ilegíveis serão redefinidos após esta confirmação." : ""} Você poderá restaurar a base de outubro depois.`, "Apagar lançamentos", () => {
-  if (storageBlocked) state = sourceState();
+$("clear-data").addEventListener("click", () => confirmAction("Apagar os dados salvos?", `Todos os lançamentos e status de pagamento de TODOS os meses serão apagados. Categorias, etiquetas e dia de vencimento serão preservados.${storageBlocked ? " Os dados ilegíveis serão redefinidos após esta confirmação." : ""}`, "Apagar dados", () => {
+  if (storageBlocked) state = emptyState();
   state.invoices = {};
+  state.payments = {};
   storageBlocked = false;
   const saved = saveState();
   resetFilters();
   render();
-  if (saved) notify("Lançamentos de todos os meses apagados. Configurações preservadas.");
+  if (saved) notify("Lançamentos e pagamentos de todos os meses apagados. Configurações preservadas.");
 }));
 render();
 if (!storageBlocked) {
   const saved = saveState();
-  if (saved && migrationApplied) notify("Dados anteriores preservados em outubro de 2026. Outros meses começam vazios.");
+  if (saved && migrationApplied) notify("Dados salvos preservados na nova versão.");
 }
 // Recalcula quando a aba volta ao primeiro plano e atravessa a meia-noite local.
 setInterval(renderDue, 60000);
