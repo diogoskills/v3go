@@ -35,8 +35,8 @@ const InvoiceMath = Object.freeze({
 });
 
 const $ = id => document.getElementById(id);
-const STORAGE_KEY = "v3go.invoice.v4";
-const PREVIOUS_KEYS = ["v3go.invoice.v3", "v3go.invoice.v2", "v3go.invoice.v1"];
+const STORAGE_KEY = "v3go.invoice.v5";
+const PREVIOUS_KEYS = ["v3go.invoice.v4", "v3go.invoice.v3", "v3go.invoice.v2", "v3go.invoice.v1"];
 const BASE_PERIOD = "2026-10";
 const DEFAULT_CATEGORIES = [
   { id: "fixed", name: "Fixos", color: "#8865c3" },
@@ -66,7 +66,7 @@ const normalizeName = name => name.trim().replace(/\s+/g, " ");
 const compareName = name => normalizeName(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
 const validPeriod = period => typeof period === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(period) && Number(period.slice(0, 4)) >= 1;
 const newId = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const emptyState = () => ({ version: 4, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {}, settlements: {}, invoiceFunding: {}, salaryDefaults: JSON.parse(JSON.stringify(DEFAULT_SALARY)), salaryMonths: {}, cardImage: null });
+const emptyState = () => ({ version: 5, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {}, settlements: {}, invoiceFunding: {}, salaryDefaults: JSON.parse(JSON.stringify(DEFAULT_SALARY)), salaryMonths: {}, cardImage: null, balanceRefs: {}, forecastDates: {} });
 
 // Datas locais: diferenças de dias civis evitam erros de horário de verão.
 const DueCalendar = Object.freeze({
@@ -139,29 +139,82 @@ function receiptDate(period, receipt) {
   const [year, month] = period.split("-").map(Number);
   return localDateString(DueCalendar.date(year, month - 1, receipt.day));
 }
+function syncSalaryRecords(data) {
+  for (const period of new Set([...Object.keys(data.invoices), ...Object.keys(data.salaryMonths)])) {
+    const salary = data.salaryMonths[period];
+    let records = data.invoices[period] ?? [];
+    for (const source of ["first", "second"]) {
+      const receipt = salary?.[source];
+      const existing = records.find(record => record.salarySource === source);
+      records = records.filter(record => record.salarySource !== source);
+      if (receipt?.received) {
+        const prefix = `salary-${period}-${source}`;
+        const id = existing?.id ?? (records.some(record => record.id === prefix) ? newId() : prefix);
+        records.push({ id, description: existing?.description ?? `Salário · ${FUNDINGS[source]}`, categoryId: existing?.categoryId ?? null, labelId: existing?.labelId ?? null, cents: receipt.actualCents, type: "income", date: receipt.actualDate, status: "received", paymentMethod: null, funding: null, salarySource: source });
+      }
+    }
+    if (records.length || Object.hasOwn(data.invoices, period)) data.invoices[period] = records;
+  }
+}
+function undoSalary(data, period, source) {
+  data.salaryMonths[period][source] = { ...data.salaryMonths[period][source], received: false, actualCents: null, actualDate: null };
+  syncSalaryRecords(data);
+}
+function balanceFor(period = state.period, data = state) {
+  return data.balanceRefs[period] ?? { cents: 0, date: todayDate() };
+}
+function forecastFor(period = state.period, data = state) {
+  if (data.forecastDates[period]) return data.forecastDates[period];
+  const [year, month] = period.split("-").map(Number);
+  const end = localDateString(DueCalendar.date(year, month - 1, 31));
+  return end > balanceFor(period, data).date ? end : balanceFor(period, data).date;
+}
+function financialItem(record) {
+  return { label: record.description, cents: record.cents ?? 0, date: record.date, undefinedValue: record.cents === null };
+}
 const FinanceMath = Object.freeze({
   safe(value) { if (!Number.isSafeInteger(value)) throw new Error("O resultado excede o limite de cálculo preciso."); return value; },
-  calculate(records, salary, settlement = null) {
+  calculate(records, salary, settlement = null, options = {}) {
+    const period = options.period ?? BASE_PERIOD;
+    const reference = options.reference ?? { cents: 0, date: todayDate() };
+    const today = options.today ?? todayDate();
+    const target = options.target ?? today;
     const incomes = records.filter(record => record.type === "income");
     const expenses = records.filter(record => record.type === "expense");
     const credit = expenses.filter(record => record.paymentMethod === "credit");
     const direct = expenses.filter(record => record.paymentMethod !== "credit");
-    const salaryReceived = InvoiceMath.sum([salary.first, salary.second].filter(receipt => receipt.received).map(receipt => ({ cents: receipt.actualCents })));
-    const salaryExpected = InvoiceMath.sum([salary.first, salary.second].filter(receipt => !receipt.received).map(receipt => ({ cents: receipt.expectedCents })));
-    const incomeReceived = this.safe(InvoiceMath.sum(incomes.filter(record => record.status === "received")) + salaryReceived);
-    const incomeExpected = this.safe(InvoiceMath.sum(incomes.filter(record => record.status === "expected")) + salaryExpected);
+    const expectedSalary = ["first", "second"].filter(source => !salary[source].received).map(source => ({ label: `${FUNDINGS[source]} · prevista`, cents: salary[source].expectedCents, date: receiptDate(period, salary[source]) }));
+    // Recebimentos confirmados já estão em incomes: não são adicionados de novo.
     const invoice = InvoiceMath.sum(credit);
     const invoicePaid = settlement?.cents ?? 0;
     const invoiceRemaining = settlement ? Math.max(this.safe(invoice - invoicePaid), 0) : invoice;
-    const expensePaid = this.safe(InvoiceMath.sum(direct.filter(record => record.status === "paid")) + invoicePaid);
-    const expensePending = this.safe(InvoiceMath.sum(direct.filter(record => record.status === "pending")) + invoiceRemaining);
-    return { invoice, invoicePaid, invoiceRemaining, incomeReceived, incomeExpected, expensePaid, expensePending, spending: InvoiceMath.sum(expenses), available: this.safe(incomeReceived - expensePaid), projected: this.safe(this.safe(incomeReceived + incomeExpected) - this.safe(expensePaid + expensePending)) };
+    const invoiceDate = localDateString(DueCalendar.calculate(period, options.dueDay ?? 5).due);
+    const parts = {
+      invoice: credit.map(financialItem),
+      incomeReceived: incomes.filter(record => record.status === "received").map(financialItem),
+      incomeExpected: [...incomes.filter(record => record.status === "expected").map(financialItem), ...expectedSalary],
+      expensePaid: [...direct.filter(record => record.status === "paid").map(financialItem), ...(settlement ? [{ label: "Pagamento da fatura", cents: invoicePaid, date: settlement.date }] : [])],
+      expensePending: [...direct.filter(record => record.status === "pending").map(financialItem), ...(invoiceRemaining !== 0 ? [{ label: "Fatura ainda a pagar", cents: invoiceRemaining, date: invoiceDate }] : [])],
+      spending: expenses.map(financialItem)
+    };
+    const realized = [...parts.incomeReceived.map(item => ({ ...item, movement: "Entrada recebida" })), ...parts.expensePaid.map(item => ({ ...item, cents: -item.cents, movement: "Saída paga" }))];
+    const pending = [...parts.incomeExpected.map(item => ({ ...item, movement: "Entrada prevista" })), ...parts.expensePending.map(item => ({ ...item, cents: -item.cents, movement: "Saída pendente" }))];
+    // A referência representa o fechamento do dia: movimentos desse dia já estão incluídos.
+    const realizedUntil = date => realized.filter(item => item.date && item.date > reference.date && item.date <= date);
+    parts.available = realizedUntil(today);
+    parts.projected = [...realizedUntil(target), ...pending.filter(item => item.date && item.date <= target)];
+    const incomeReceived = InvoiceMath.sum(parts.incomeReceived);
+    const incomeExpected = InvoiceMath.sum(parts.incomeExpected);
+    const expensePaid = InvoiceMath.sum(parts.expensePaid);
+    const expensePending = InvoiceMath.sum(parts.expensePending);
+    return { invoice, invoicePaid, invoiceRemaining, incomeReceived, incomeExpected, expensePaid, expensePending, spending: InvoiceMath.sum(expenses), available: this.safe(reference.cents + InvoiceMath.sum(parts.available)), projected: this.safe(reference.cents + InvoiceMath.sum(parts.projected)), reference, target, today, parts, undated: [...realized, ...pending].filter(item => !item.date), alreadyIncluded: realized.filter(item => item.date && item.date <= reference.date) };
   }
 });
 function financeFor(period = state.period, data = state) {
   const salary = data.salaryMonths[period] ?? salarySnapshot(data.salaryDefaults);
-  return FinanceMath.calculate(data.invoices[period] ?? [], salary, data.payments[period] ? data.settlements[period] : null);
+  return FinanceMath.calculate(data.invoices[period] ?? [], salary, data.payments[period] ? data.settlements[period] : null, { period, dueDay: data.dueDay, reference: balanceFor(period, data), target: forecastFor(period, data) });
 }
+
 function validateSalaryDefaults(data) {
   if (!data || !Number.isSafeInteger(data.grossCents) || data.grossCents < 0) throw new Error("Salário bruto inválido.");
   const result = { grossCents: data.grossCents };
@@ -187,7 +240,7 @@ function validateSalaryMonth(data) {
   return result;
 }
 function validateState(data) {
-  if (!data || data.version !== 4 || !validPeriod(data.period) || !Number.isInteger(data.dueDay) || data.dueDay < 1 || data.dueDay > 31 ||
+  if (!data || data.version !== 5 || !validPeriod(data.period) || !Number.isInteger(data.dueDay) || data.dueDay < 1 || data.dueDay > 31 ||
       !data.invoices || typeof data.invoices !== "object" || Array.isArray(data.invoices)) throw new Error("Dados salvos inválidos.");
   const categories = validateOptions(data.categories, "categories");
   const labels = validateOptions(data.labels, "labels");
@@ -204,13 +257,13 @@ function validateState(data) {
           (record.cents !== null && !Number.isSafeInteger(record.cents)) || !["income", "expense"].includes(record.type) ||
           (record.date !== null && !validDate(record.date)) || !(income ? ["expected", "received"] : ["pending", "paid"]).includes(record.status) ||
           (income ? record.paymentMethod !== null : !Object.hasOwn(METHODS, record.paymentMethod)) ||
-          (record.funding !== null && !Object.hasOwn(FUNDINGS, record.funding)) || (income && record.funding !== null)) throw new Error("Lançamento inválido.");
+          (record.funding !== null && !Object.hasOwn(FUNDINGS, record.funding)) || (income && record.funding !== null) || ![null, "first", "second"].includes(record.salarySource)) throw new Error("Lançamento inválido.");
       ids.add(record.id);
-      return { id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding };
+      return { id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding, salarySource: record.salarySource };
     });
     InvoiceMath.calculate(creditRecords(invoices[period]), categories);
   }
-  for (const field of ["payments", "settlements", "invoiceFunding", "salaryMonths"]) if (!data[field] || typeof data[field] !== "object" || Array.isArray(data[field])) throw new Error("Configuração mensal inválida.");
+  for (const field of ["payments", "settlements", "invoiceFunding", "salaryMonths", "balanceRefs", "forecastDates"]) if (!data[field] || typeof data[field] !== "object" || Array.isArray(data[field])) throw new Error("Configuração mensal inválida.");
   const payments = {}, settlements = {}, invoiceFunding = {}, salaryMonths = {};
   for (const [period, paid] of Object.entries(data.payments)) {
     if (!validPeriod(period) || typeof paid !== "boolean") throw new Error("Pagamento inválido.");
@@ -231,7 +284,25 @@ function validateState(data) {
     salaryMonths[period] = validateSalaryMonth(salary);
   }
   if (data.cardImage !== null && (typeof data.cardImage !== "string" || data.cardImage.length > 1500000 || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(data.cardImage))) throw new Error("Imagem salva inválida.");
-  const result = { version: 4, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments, settlements, invoiceFunding, salaryDefaults, salaryMonths, cardImage: data.cardImage };
+  const balanceRefs = {}, forecastDates = {};
+  for (const [period, reference] of Object.entries(data.balanceRefs)) {
+    if (!validPeriod(period) || !reference || !Number.isSafeInteger(reference.cents) || !validDate(reference.date)) throw new Error("Saldo de referência inválido.");
+    balanceRefs[period] = { cents: reference.cents, date: reference.date };
+  }
+  for (const [period, date] of Object.entries(data.forecastDates)) {
+    if (!validPeriod(period) || !validDate(date) || (balanceRefs[period] && date < balanceRefs[period].date)) throw new Error("Data de previsão inválida.");
+    forecastDates[period] = date;
+  }
+  for (const period of new Set([...Object.keys(invoices), ...Object.keys(salaryMonths)])) {
+    for (const source of ["first", "second"]) {
+      const linked = (invoices[period] ?? []).filter(record => record.salarySource === source);
+      const receipt = salaryMonths[period]?.[source];
+      if (receipt?.received) {
+        if (linked.length !== 1 || linked[0].type !== "income" || linked[0].status !== "received" || linked[0].cents !== receipt.actualCents || linked[0].date !== receipt.actualDate) throw new Error("Entrada de quinzena fora de sincronia.");
+      } else if (linked.length) throw new Error("Entrada de quinzena sem confirmação.");
+    }
+  }
+  const result = { version: 5, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments, settlements, invoiceFunding, salaryDefaults, salaryMonths, cardImage: data.cardImage, balanceRefs, forecastDates };
   for (const period of new Set([data.period, ...Object.keys(invoices), ...Object.keys(salaryMonths), ...Object.keys(settlements)])) financeFor(period, result);
   return result;
 }
@@ -241,7 +312,17 @@ function completeCategories(categories) {
   return result;
 }
 function migratePrevious(data) {
-  if (!data || ![1, 2, 3].includes(data.version)) throw new Error("Versão anterior inválida.");
+  if (!data || ![1, 2, 3, 4].includes(data.version)) throw new Error("Versão anterior inválida.");
+  if (data.version === 4) {
+    const migrated = { ...data, version: 5, balanceRefs: {}, forecastDates: {} };
+    if (!data.invoices || typeof data.invoices !== "object" || Array.isArray(data.invoices)) throw new Error("Base anterior inválida.");
+    migrated.invoices = Object.fromEntries(Object.entries(data.invoices).map(([period, records]) => {
+      if (!Array.isArray(records)) throw new Error("Lançamentos anteriores inválidos.");
+      return [period, records.map(record => ({ ...record, salarySource: null }))];
+    }));
+    syncSalaryRecords(migrated);
+    return validateState(migrated);
+  }
   const migrated = emptyState();
   if (data.version === 1) {
     if (!validPeriod(data.period) || !Array.isArray(data.records)) throw new Error("Base antiga inválida.");
@@ -261,7 +342,7 @@ function migratePrevious(data) {
   const mapped = {};
   for (const [period, records] of Object.entries(migrated.invoices)) {
     if (!Array.isArray(records)) throw new Error("Lançamentos anteriores inválidos.");
-    mapped[period] = records.map(record => ({ id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: "expense", date: null, status: "pending", paymentMethod: "credit", funding: null }));
+    mapped[period] = records.map(record => ({ id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: "expense", date: null, status: "pending", paymentMethod: "credit", funding: null, salarySource: null }));
   }
   migrated.invoices = mapped;
   if (!migrated.payments || typeof migrated.payments !== "object" || Array.isArray(migrated.payments)) throw new Error("Pagamentos anteriores inválidos.");
@@ -410,32 +491,21 @@ function renderRow(record) {
 }
 function renderDue() {
   const info = DueCalendar.calculate(state.period, state.dueDay);
-  const format = date => new Intl.DateTimeFormat("pt-BR").format(date);
-  $("due-date").textContent = format(info.due);
+  $("due-date").textContent = displayDate(localDateString(info.due));
   const confirmed = state.payments[state.period] === true;
   const finance = financeFor();
   const partial = confirmed && finance.invoiceRemaining > 0;
   const paid = confirmed && !partial;
   const message = partial ? "Pagamento parcial" : paid ? "Fatura paga" : info.message;
   const status = partial ? "partial" : paid ? "paid" : info.status;
-  const progress = paid ? 100 : info.progress;
   $("due-message").textContent = message;
   $("due-message").dataset.status = status;
-  $("due-progress").dataset.status = status;
-  $("due-progress").setAttribute("aria-valuenow", String(Math.round(progress)));
-  $("due-progress").setAttribute("aria-valuetext", paid ? "Fatura paga. Pagamento confirmado pelo usuário." : `${message}. ${Math.round(progress)}% do intervalo entre vencimentos.`);
-  $("due-progress").setAttribute("aria-label", paid ? "Estado de pagamento da fatura" : "Proximidade do vencimento");
-  $("due-fill").style.width = `${progress}%`;
   $("toggle-payment").textContent = partial ? "Desfazer pagamento" : paid ? "Marcar como não paga" : "Marcar como paga";
   $("toggle-payment").setAttribute("aria-pressed", String(confirmed));
-  $("due-interval").textContent = `Intervalo: ${format(info.previous)} → ${format(info.due)}`;
-  $("edit-invoice-payment").hidden = !confirmed;
-  $("invoice-payment-note").textContent = confirmed ? `Pagamento registrado: ${currency(finance.invoicePaid)} · ${displayDate(state.settlements[state.period].date)}.${finance.invoicePaid !== finance.invoice ? ` A fatura atual difere do valor pago em ${currency(finance.invoice - finance.invoicePaid)}; confira ou corrija o pagamento.` : ""}` : "A fatura ainda não tem pagamento confirmado.";
-  $("invoice-funding").value = state.invoiceFunding[state.period] ?? "";
   $("visual-card-period").textContent = periodLabel(state.period);
   $("visual-card-total").textContent = currency(finance.invoice);
   $("visual-card-status").textContent = partial ? "Pagamento parcial" : paid ? "Fatura paga" : "Fatura em aberto";
-  $("credit-card").style.backgroundImage = state.cardImage ? `url("${state.cardImage}")` : "";
+  $("card-background").style.backgroundImage = state.cardImage ? `url("${state.cardImage}")` : "";
 }
 function renderManagement() {
   for (const type of ["categories", "labels"]) {
@@ -478,10 +548,7 @@ function render() {
   $("due-day").value = state.dueDay;
   $("total").textContent = currency(totals.total);
   $("total-caption").textContent = periodLabel(state.period);
-  for (const [id, value] of [["income-expected", finance.incomeExpected], ["income-received", finance.incomeReceived], ["expense-pending", finance.expensePending], ["expense-paid", finance.expensePaid], ["available-balance", finance.available], ["projected-balance", finance.projected], ["monthly-spending", finance.spending]]) {
-    $(id).textContent = currency(value);
-    $(id).classList.toggle("negative-value", value < 0);
-  }
+  refreshFinancialIndicators();
   document.querySelectorAll(".category-summary").forEach(card => card.remove());
   const categories = [...state.categories];
   if (credit.some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
@@ -515,6 +582,7 @@ function render() {
   $("combined-total").textContent = currency(totals.total);
   if (selectedCategory !== "all" && selectedCategory !== "none" && !state.categories.some(category => category.id === selectedCategory)) selectedCategory = "all";
   if (selectedLabel !== "all" && selectedLabel !== "" && !state.labels.some(label => label.id === selectedLabel)) selectedLabel = "all";
+  const categoryScroll = $("category-tabs").scrollLeft;
   $("category-tabs").replaceChildren();
   for (const category of [{ id: "all", name: "Todos" }, ...state.categories, { id: "none", name: "Sem categoria" }]) {
     const button = document.createElement("button");
@@ -524,6 +592,8 @@ function render() {
     button.setAttribute("aria-pressed", String(selectedCategory === category.id));
     $("category-tabs").append(button);
   }
+  $("category-tabs").scrollLeft = categoryScroll;
+  requestAnimationFrame(updateCategoryNavigation);
   selectOptions($("label-filter"), state.labels, "Sem etiqueta", selectedLabel, true);
   const query = compareName($("search").value);
   const selectedType = $("type-filter").value;
@@ -543,6 +613,8 @@ function render() {
   renderDue();
   renderCustomSum();
   renderSalary();
+  renderBalanceControls();
+  refreshExplanation();
 }
 function openRecord(record = null) {
   editingId = record?.id ?? null;
@@ -557,6 +629,7 @@ function openRecord(record = null) {
   renderFormOptions(record ? record.categoryId ?? "" : defaultCategory, record?.labelId ?? "");
   $("value").value = record?.cents == null ? "" : decimalInput(record.cents);
   $("record-type").value = record?.type ?? "expense";
+  $("record-type").disabled = !!record?.salarySource;
   $("record-date").value = record ? record.date ?? "" : defaultRecordDate(state.period);
   $("payment-method").value = record?.paymentMethod ?? "credit";
   $("record-funding").value = record?.funding ?? "";
@@ -657,6 +730,7 @@ function renderCustomSum() {
   }
   $("sum-empty").hidden = categories.length > 0;
   renderCustomResult();
+  refreshExplanation();
 }
 $("toggle-payment").addEventListener("click", () => {
   if (!state.payments[state.period]) { openSettlement(); return; }
@@ -689,6 +763,7 @@ $("sum-options").addEventListener("change", event => {
   if (checkbox.checked) customSelection.add(checkbox.dataset.sumCategory);
   else customSelection.delete(checkbox.dataset.sumCategory);
   renderCustomResult();
+  refreshExplanation();
 });
 for (const [id, select] of [["sum-all", true], ["sum-none", false]]) $(id).addEventListener("click", () => {
   customSelection = select ? new Set(availableSumCategories().map(category => category.id)) : new Set();
@@ -727,11 +802,20 @@ $("record-form").addEventListener("submit", event => {
     if (["received", "paid"].includes(status) && cents === null) { invalidField = "value"; throw new Error("Um valor confirmado precisa ser preenchido."); }
     const paymentMethod = type === "expense" ? $("payment-method").value : null;
     const funding = type === "expense" && paymentMethod !== "credit" ? $("record-funding").value || null : null;
-    const record = { id: editingId ?? newId(), description, categoryId, labelId, cents, type, date, status, paymentMethod, funding };
+    const record = { id: editingId ?? newId(), description, categoryId, labelId, cents, type, date, status, paymentMethod, funding, salarySource: previousRecord?.salarySource ?? null };
     const previous = state.invoices[editingPeriod] ?? [];
     const records = editingId ? previous.map(item => item.id === editingId ? record : item) : [...previous, record];
     const candidate = JSON.parse(JSON.stringify(state));
     candidate.invoices[editingPeriod] = records;
+    if (record.salarySource) {
+      const receipt = candidate.salaryMonths[editingPeriod][record.salarySource];
+      if (status === "expected") undoSalary(candidate, editingPeriod, record.salarySource);
+      else {
+        if (type !== "income" || cents === null || cents < 0 || !validDate(date)) throw new Error("Uma quinzena recebida precisa de valor não negativo e data válida.");
+        candidate.salaryMonths[editingPeriod][record.salarySource] = { ...receipt, received: true, actualCents: cents, actualDate: date };
+        syncSalaryRecords(candidate);
+      }
+    }
     state = validateState(candidate);
     const saved = saveState();
     $("record-dialog").close();
@@ -753,8 +837,9 @@ $("records").addEventListener("click", event => {
   if (button.dataset.action === "edit") openRecord(record);
   else {
     const period = state.period;
-    confirmAction("Excluir lançamento?", `“${record.description}” será removido somente de ${periodLabel(period)}.`, "Excluir lançamento", () => {
-      state.invoices[period] = state.invoices[period].filter(item => item.id !== record.id);
+    confirmAction("Excluir lançamento?", `“${record.description}” será removido somente de ${periodLabel(period)}.${record.salarySource ? " A confirmação desta quinzena também será desfeita." : ""}`, "Excluir lançamento", () => {
+      if (record.salarySource) undoSalary(state, period, record.salarySource);
+      else state.invoices[period] = state.invoices[period].filter(item => item.id !== record.id);
       const saved = saveState();
       render();
       if (saved) notify("Lançamento excluído deste mês.");
@@ -844,13 +929,15 @@ $("confirm-ok").addEventListener("click", () => {
   action?.();
 });
 $("confirm-dialog").addEventListener("cancel", () => { confirmationAction = null; });
-$("clear-data").addEventListener("click", () => confirmAction("Apagar os dados salvos?", `Todos os lançamentos, pagamentos e recebimentos de salário de TODOS os meses serão apagados. Categorias, etiquetas, salário padrão, imagem e dia de vencimento serão preservados.${storageBlocked ? " Os dados ilegíveis serão redefinidos após esta confirmação." : ""}`, "Apagar dados", () => {
+$("clear-data").addEventListener("click", () => confirmAction("Apagar os dados salvos?", `Todos os lançamentos, pagamentos, recebimentos de salário e saldos de referência de TODOS os meses serão apagados. Categorias, etiquetas, salário padrão, imagem e dia de vencimento serão preservados.${storageBlocked ? " Os dados ilegíveis serão redefinidos após esta confirmação." : ""}`, "Apagar dados", () => {
   if (storageBlocked) state = emptyState();
   state.invoices = {};
   state.payments = {};
   state.settlements = {};
   state.invoiceFunding = {};
   state.salaryMonths = {};
+  state.balanceRefs = {};
+  state.forecastDates = {};
   storageBlocked = false;
   const saved = saveState();
   resetFilters();
@@ -922,6 +1009,13 @@ function commitmentElement(commitment, receipt = null) {
   }
   select.value = commitment.funding ?? "";
   row.append(title, amount, detail, select);
+  if (commitment.id === "invoice" && state.payments[state.period]) {
+    const edit = document.createElement("button");
+    edit.className = "text-button commitment-edit";
+    edit.textContent = "Corrigir pagamento da fatura";
+    edit.addEventListener("click", openSettlement);
+    row.append(edit);
+  }
   if (receipt) {
     const coverageDate = receipt.received ? receipt.actualDate : receiptDate(state.period, receipt);
     if (commitment.date && commitment.date < coverageDate) {
@@ -984,7 +1078,17 @@ function renderSalary() {
       undo.setAttribute("aria-label", `Desfazer recebimento: ${FUNDINGS[id]}`);
       actions.append(undo);
     }
-    card.append(heading, expectedValue, actual, date, actions);
+    const receiptHelp = document.createElement("button");
+    receiptHelp.className = "help-button";
+    receiptHelp.dataset.help = `receipt-${id}`;
+    receiptHelp.textContent = "?";
+    receiptHelp.setAttribute("aria-label", `Detalhes do recebimento de ${FUNDINGS[id]}`);
+    receiptHelp.setAttribute("aria-expanded", "false");
+    receiptHelp.setAttribute("aria-controls", "total-details");
+    const amountLine = document.createElement("div");
+    amountLine.className = "indicator-line";
+    amountLine.append(actual, receiptHelp);
+    card.append(heading, expectedValue, amountLine, date, actions);
     $("salary-receipts").append(card);
     const selected = commitments.filter(commitment => commitment.funding === id);
     const committed = InvoiceMath.sum(selected);
@@ -999,7 +1103,17 @@ function renderSalary() {
     const result = document.createElement("strong");
     result.className = "plan-result";
     result.textContent = left < 0 ? `Faltam ${currency(-left)}` : `Sobram ${currency(left)}`;
-    plan.append(planHeading, text, result);
+    const planHelp = document.createElement("button");
+    planHelp.className = "help-button";
+    planHelp.dataset.help = `plan-${id}`;
+    planHelp.textContent = "?";
+    planHelp.setAttribute("aria-label", `Detalhes dos compromissos de ${FUNDINGS[id]}`);
+    planHelp.setAttribute("aria-expanded", "false");
+    planHelp.setAttribute("aria-controls", "total-details");
+    const resultLine = document.createElement("div");
+    resultLine.className = "indicator-line";
+    resultLine.append(result, planHelp);
+    plan.append(planHeading, text, resultLine);
     if (committed > receipt.expectedCents) {
       const warning = document.createElement("p");
       warning.className = "timing-warning";
@@ -1069,12 +1183,6 @@ document.querySelector('.nav-link[href="#lancamentos"]').addEventListener("click
 $("record-type").addEventListener("change", () => updateRecordFields());
 $("payment-method").addEventListener("change", () => updateRecordFields());
 $("type-filter").addEventListener("change", render);
-$("edit-invoice-payment").addEventListener("click", openSettlement);
-$("invoice-funding").addEventListener("change", () => {
-  state.invoiceFunding[state.period] = $("invoice-funding").value || null;
-  saveState();
-  renderSalary();
-});
 $("salary-config").addEventListener("submit", event => {
   event.preventDefault();
   try {
@@ -1100,7 +1208,7 @@ $("salary-receipts").addEventListener("click", event => {
   if (!undo) return;
   const period = state.period, id = undo.dataset.undoReceipt;
   confirmAction("Desfazer recebimento?", `Somente ${FUNDINGS[id]} de ${periodLabel(period)} voltará a ser prevista. A fatura não será alterada.`, "Desfazer recebimento", () => {
-    state.salaryMonths[period][id] = { ...state.salaryMonths[period][id], received: false, actualCents: null, actualDate: null };
+    undoSalary(state, period, id);
     const saved = saveState();
     render();
     if (saved) notify("Confirmação de recebimento desfeita.");
@@ -1116,6 +1224,7 @@ $("receipt-form").addEventListener("submit", event => {
     const candidate = JSON.parse(JSON.stringify(state));
     const salary = salaryFor(period);
     candidate.salaryMonths[period] = { ...salary, [id]: { ...salary[id], received: true, actualCents: value, actualDate: date } };
+    syncSalaryRecords(candidate);
     state = validateState(candidate);
     const saved = saveState();
     $("receipt-dialog").close();
@@ -1209,11 +1318,241 @@ $("restore-card").addEventListener("click", () => {
   notify("Imagem padrão restaurada.");
 });
 
+function refreshFinancialIndicators() {
+  const finance = financeFor();
+  for (const [id, value] of [["income-expected", finance.incomeExpected], ["income-received", finance.incomeReceived], ["expense-pending", finance.expensePending], ["expense-paid", finance.expensePaid], ["available-balance", finance.available], ["projected-balance", finance.projected], ["monthly-spending", finance.spending]]) {
+    $(id).textContent = currency(value);
+    $(id).classList.toggle("negative-value", value < 0);
+  }
+  refreshExplanation();
+}
+function renderBalanceControls() {
+  const reference = balanceFor();
+  $("bank-balance").value = decimalInput(reference.cents);
+  $("balance-date").value = reference.date;
+  $("forecast-date").value = forecastFor();
+  $("forecast-date").min = reference.date;
+  $("forecast-caption").textContent = `Para ${displayDate(forecastFor())}`;
+  $("forecast-period-note").textContent = `Somente movimentos de ${periodLabel(state.period)}.`;
+  $("balance-reference-note").textContent = `${state.balanceRefs[state.period] ? "Referência salva para este período." : "Saldo ainda não informado: usando zero como ponto de partida."} O saldo inclui movimentos realizados até o final da data informada. Movimentos posteriores são considerados uma vez.`;
+}
+$("balance-form").addEventListener("submit", event => {
+  event.preventDefault();
+  try {
+    const cents = InvoiceMath.parseMoney($("bank-balance").value);
+    const date = $("balance-date").value;
+    if (cents === null) throw new Error("Preencha o saldo atual disponível no banco.");
+    if (!validDate(date)) throw new Error("Informe uma data de referência válida.");
+    if (date > todayDate()) throw new Error("O saldo atual deve ter referência em hoje ou em uma data anterior.");
+    const candidate = JSON.parse(JSON.stringify(state));
+    candidate.balanceRefs[state.period] = { cents, date };
+    if (candidate.forecastDates[state.period] && candidate.forecastDates[state.period] < date) candidate.forecastDates[state.period] = date;
+    state = validateState(candidate);
+    $("balance-error").hidden = true;
+    $("forecast-error").hidden = true;
+    const saved = saveState();
+    render();
+    if (saved) notify("Saldo atual e referência salvos para este mês e ano.");
+  } catch (error) {
+    $("balance-error").textContent = error.message;
+    $("balance-error").hidden = false;
+  }
+});
+$("forecast-date").addEventListener("change", () => {
+  const date = $("forecast-date").value;
+  if (!validDate(date) || date < balanceFor().date) {
+    $("forecast-error").textContent = "Escolha uma data válida, igual ou posterior à referência do saldo.";
+    $("forecast-error").hidden = false;
+    return;
+  }
+  const candidate = JSON.parse(JSON.stringify(state));
+  candidate.forecastDates[state.period] = date;
+  try {
+    state = validateState(candidate);
+    $("forecast-error").hidden = true;
+    saveState();
+    render();
+  } catch (error) {
+    $("forecast-error").textContent = error.message;
+    $("forecast-error").hidden = false;
+  }
+});
+function updateCategoryNavigation() {
+  const strip = $("category-tabs");
+  $("categories-prev").disabled = strip.scrollLeft <= 1;
+  $("categories-next").disabled = strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 2;
+}
+for (const [id, direction] of [["categories-prev", -1], ["categories-next", 1]]) $(id).addEventListener("click", () => {
+  const strip = $("category-tabs");
+  strip.scrollBy({ left: direction * Math.max(150, strip.clientWidth * .75), behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+});
+$("category-tabs").addEventListener("scroll", updateCategoryNavigation);
+window.addEventListener("resize", updateCategoryNavigation);
+
+// Os pop-ups usam os mesmos itens que a função de cálculo, sem fórmulas paralelas.
+const HELP_TITLES = { invoice: "Total da fatura", incomeExpected: "Entradas previstas", incomeReceived: "Entradas recebidas", expensePending: "Saídas previstas", expensePaid: "Saídas pagas", available: "Saldo disponível agora", projected: "Saldo previsto", spending: "Gastos do mês", custom: "Soma das categorias selecionadas", salaryExpected: "Previsão das quinzenas", salaryDifference: "Diferença do salário" };
+document.querySelectorAll(".summary .help-button").forEach(button => button.setAttribute("aria-label", `Detalhes de ${HELP_TITLES[button.dataset.help]}`));
+let explanationButton = null;
+let explanationPinned = false;
+let explanationTimer;
+let suppressExplanationFocus = false;
+function explanationData(key) {
+  const finance = financeFor();
+  const basic = { title: HELP_TITLES[key] ?? "Detalhes do indicador", amount: finance[key], items: finance.parts[key] ?? [], note: `Período: ${periodLabel(state.period)}.` };
+  const formulas = {
+    invoice: "Soma das compras no cartão. O pagamento da fatura não é outra compra.",
+    incomeExpected: "Entradas previstas e quinzenas ainda não recebidas. O salário bruto não entra na soma.",
+    incomeReceived: "Entradas recebidas, incluindo uma única entrada vinculada para cada quinzena confirmada.",
+    expensePending: "Saídas fora do cartão ainda pendentes e valor da fatura ainda a pagar.",
+    expensePaid: "Saídas pagas fora do cartão e pagamento registrado da fatura, uma única vez.",
+    spending: "Todas as despesas do mês. Compras no cartão entram uma vez; o pagamento da fatura não é somado de novo."
+  };
+  if (key === "available" || key === "projected") {
+    basic.items = [{ label: "Saldo bancário de referência", cents: finance.reference.cents, date: finance.reference.date }, ...finance.parts[key]];
+    basic.formula = key === "available" ? `Referência + entradas recebidas − saídas pagas, posteriores a ${displayDate(finance.reference.date)} e até ${displayDate(finance.today)}.` : `Referência + movimentos realizados posteriores até ${displayDate(finance.target)} + entradas e saídas pendentes até essa data.`;
+    basic.note += ` ${finance.alreadyIncluded.length} movimento(s) realizados até a referência já estão incluídos nela e não são somados de novo. A referência considera o fim do dia.`;
+    if (finance.undated.length) basic.note += ` ${finance.undated.length} movimento(s) sem data ficam fora dos saldos. Preencha as datas para incluí-los com segurança.`;
+    if (!state.balanceRefs[state.period]) basic.note += " Saldo bancário ainda não informado: referência inicial zero.";
+  } else if (key === "custom") {
+    const totals = InvoiceMath.calculate(creditRecords(), state.categories);
+    basic.items = availableSumCategories().filter(category => customSelection.has(category.id)).map(category => ({ label: category.name, cents: totals.groups[category.id], date: null }));
+    basic.amount = InvoiceMath.selectedTotal(creditRecords(), customSelection);
+    basic.formula = "Soma dos subtotais das categorias marcadas, apenas nas compras no cartão. Não altera a fatura.";
+  } else if (key === "salaryExpected" || key === "salaryDifference") {
+    const salary = salaryFor();
+    basic.items = ["first", "second"].map(id => ({ label: `${FUNDINGS[id]} · prevista`, cents: key === "salaryDifference" ? -salary[id].expectedCents : salary[id].expectedCents, date: receiptDate(state.period, salary[id]) }));
+    if (key === "salaryDifference") basic.items.unshift({ label: "Salário bruto de referência", cents: salary.grossCents, date: null });
+    basic.amount = InvoiceMath.sum(basic.items);
+    basic.formula = key === "salaryDifference" ? "Salário bruto menos as duas previsões. Diferença apenas informativa; não gera despesa." : "Soma das duas previsões. Recebimentos reais podem ter outros valores.";
+  } else if (key.startsWith("receipt-")) {
+    const source = key.slice(8);
+    const receipt = salaryFor()[source];
+    basic.title = `${FUNDINGS[source]} · recebida`;
+    basic.items = receipt.received ? [{ label: `${FUNDINGS[source]} · entrada vinculada`, cents: receipt.actualCents, date: receipt.actualDate }] : [];
+    basic.amount = receipt.received ? receipt.actualCents : 0;
+    basic.formula = "Valor efetivamente recebido. A mesma entrada aparece na tabela e é contada uma vez.";
+  } else if (key.startsWith("plan-")) {
+    const source = key.slice(5);
+    const receipt = salaryFor()[source];
+    const commitments = monthCommitments().filter(item => item.funding === source);
+    basic.title = `${FUNDINGS[source]} · sobra ou falta`;
+    basic.items = [{ label: receipt.received ? "Valor recebido" : "Valor previsto", cents: receipt.received ? receipt.actualCents : receipt.expectedCents, date: receipt.received ? receipt.actualDate : receiptDate(state.period, receipt) }, ...commitments.map(item => ({ label: item.description, cents: -(item.cents ?? 0), date: item.date }))];
+    basic.amount = InvoiceMath.sum(basic.items);
+    basic.formula = "Recebimento previsto ou real menos todos os compromissos vinculados, incluindo pagos. É um orçamento da quinzena, não o saldo bancário.";
+  } else basic.formula = formulas[key] ?? "Soma dos itens indicados.";
+  return basic;
+}
+function positionExplanation() {
+  if (!explanationButton?.isConnected) { closeExplanation(); return; }
+  const popup = $("total-details");
+  const anchor = explanationButton.getBoundingClientRect();
+  const width = Math.min(360, innerWidth - 24);
+  popup.style.width = `${width}px`;
+  popup.style.left = `${Math.max(12, Math.min(innerWidth - width - 12, anchor.right - width))}px`;
+  const height = popup.offsetHeight;
+  const below = anchor.bottom + 8;
+  popup.style.top = `${below + height <= innerHeight - 12 ? below : Math.max(12, Math.min(innerHeight - height - 12, anchor.top - height - 8))}px`;
+}
+function refreshExplanation() {
+  if (!explanationButton) return;
+  if (!explanationButton.isConnected) { closeExplanation(); return; }
+  let data;
+  try { data = explanationData(explanationButton.dataset.help); }
+  catch (error) { data = { title: "Consulta fora do limite", formula: error.message, items: [], amount: null, note: "Os dados financeiros permanecem intactos." }; }
+  $("detail-title").textContent = data.title;
+  $("detail-formula").textContent = data.formula;
+  $("detail-items").replaceChildren();
+  for (const item of data.items) {
+    const row = document.createElement("div");
+    row.className = "detail-item";
+    const description = document.createElement("span");
+    description.textContent = item.label;
+    const date = document.createElement("small");
+    date.textContent = `${item.date ? displayDate(item.date) : "Sem data"}${item.movement ? ` · ${item.movement}` : ""}${item.undefinedValue ? " · valor não definido" : ""}`;
+    const value = document.createElement("strong");
+    value.textContent = currency(item.cents);
+    value.classList.toggle("negative-value", item.cents < 0);
+    row.append(description, value, date);
+    $("detail-items").append(row);
+  }
+  if (!data.items.length) $("detail-items").textContent = "Nenhum item considerado neste total.";
+  $("detail-total").textContent = data.amount === null ? "—" : `Total: ${currency(data.amount)}`;
+  $("detail-note").textContent = data.note;
+  positionExplanation();
+}
+function openExplanation(button, pin = false) {
+  clearTimeout(explanationTimer);
+  if (explanationButton && explanationButton !== button) explanationButton.setAttribute("aria-expanded", "false");
+  if (explanationButton !== button) explanationPinned = false;
+  explanationButton = button;
+  explanationPinned ||= pin;
+  button.setAttribute("aria-expanded", "true");
+  $("total-details").setAttribute("aria-hidden", "false");
+  $("total-details").classList.add("is-open");
+  refreshExplanation();
+}
+function closeExplanation(returnFocus = false) {
+  clearTimeout(explanationTimer);
+  const button = explanationButton;
+  button?.setAttribute("aria-expanded", "false");
+  explanationButton = null;
+  explanationPinned = false;
+  $("total-details").classList.remove("is-open");
+  $("total-details").setAttribute("aria-hidden", "true");
+  if (returnFocus && button?.isConnected) {
+    suppressExplanationFocus = true;
+    button.focus({ preventScroll: true });
+    setTimeout(() => { suppressExplanationFocus = false; }, 0);
+  }
+}
+function scheduleExplanationClose() {
+  clearTimeout(explanationTimer);
+  explanationTimer = setTimeout(() => {
+    if (!explanationPinned && !$("total-details").matches(":hover") && !explanationButton?.matches(":hover") && !$("total-details").contains(document.activeElement) && document.activeElement !== explanationButton) closeExplanation();
+  }, 180);
+}
+document.addEventListener("pointerover", event => {
+  const button = event.target.closest(".help-button");
+  if (button && event.pointerType !== "touch") openExplanation(button);
+});
+document.addEventListener("pointerout", event => { if (event.target.closest(".help-button")) scheduleExplanationClose(); });
+document.addEventListener("focusin", event => {
+  const button = event.target.closest(".help-button");
+  if (button && !suppressExplanationFocus) openExplanation(button);
+  else if (!$("total-details").contains(event.target) && event.target !== explanationButton) closeExplanation();
+});
+document.addEventListener("click", event => {
+  const button = event.target.closest(".help-button");
+  if (!button) return;
+  if (explanationButton === button && explanationPinned) closeExplanation();
+  else openExplanation(button, true);
+});
+document.addEventListener("pointerdown", event => {
+  if (explanationButton && !event.target.closest(".help-button") && !$("total-details").contains(event.target)) closeExplanation();
+});
+$("total-details").addEventListener("pointerenter", () => clearTimeout(explanationTimer));
+$("total-details").addEventListener("pointerleave", scheduleExplanationClose);
+$("total-details").addEventListener("focusout", scheduleExplanationClose);
+$("close-details").addEventListener("click", () => closeExplanation(true));
+document.addEventListener("keydown", event => {
+  const button = event.target.closest(".help-button");
+  if (event.key === "ArrowDown" && button) {
+    event.preventDefault();
+    openExplanation(button, true);
+    requestAnimationFrame(() => $("detail-items").focus({ preventScroll: true }));
+  } else if (event.key === "Escape" && explanationButton) {
+    event.preventDefault();
+    closeExplanation(true);
+  }
+});
+window.addEventListener("resize", () => { if (explanationButton) positionExplanation(); });
+window.addEventListener("scroll", () => { if (explanationButton) positionExplanation(); }, true);
+
 render();
 if (!storageBlocked) {
   const saved = saveState();
   if (saved && migrationApplied) notify("Dados salvos preservados na nova versão.");
 }
 // Recalcula quando a aba volta ao primeiro plano e atravessa a meia-noite local.
-setInterval(renderDue, 60000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) renderDue(); });
+setInterval(() => { renderDue(); refreshFinancialIndicators(); }, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { renderDue(); refreshFinancialIndicators(); } });
