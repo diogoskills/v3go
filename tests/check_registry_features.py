@@ -75,7 +75,7 @@ with sync_playwright() as pw:
     assert page.evaluate('currentRecords().find(r=>r.type==="income").labelIds.length')==2
     page.locator('[data-help="incomeReceived"]').focus()
     page.locator('#total-details').wait_for(state='visible')
-    assert 'Já considerado no saldo de referência — não soma novamente ao saldo.' in page.locator('#detail-items').inner_text(), (page.locator('#detail-items').inner_text(),page.evaluate('financeFor().parts.incomeReceived'),page.evaluate('explanationData("incomeReceived")'))
+    assert 'Já considerada no saldo de referência — não soma novamente.' in page.locator('#detail-items').inner_text(), (page.locator('#detail-items').inner_text(),page.evaluate('financeFor().parts.incomeReceived'),page.evaluate('explanationData("incomeReceived")'))
     page.locator('#close-details').click()
     page.locator('#period-month').select_option('11')
     recurring=page.evaluate('currentRecords().filter(r=>r.recurrenceId)')

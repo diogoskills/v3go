@@ -198,12 +198,28 @@ const FinanceMath = Object.freeze({
       expensePending: [...direct.filter(record => record.status === "pending").map(financialItem), ...(invoiceRemaining !== 0 ? [{ label: "Fatura ainda a pagar", cents: invoiceRemaining, date: invoiceDate }] : [])],
       spending: expenses.map(financialItem)
     };
-    const realized = [...parts.incomeReceived.map(item => ({ ...item, movement: "Entrada recebida" })), ...parts.expensePaid.map(item => ({ ...item, cents: -item.cents, movement: "Saída paga" }))];
-    const pending = [...parts.incomeExpected.map(item => ({ ...item, movement: "Entrada prevista" })), ...parts.expensePending.map(item => ({ ...item, cents: -item.cents, movement: "Saída pendente" }))];
+    const realized = [...parts.incomeReceived.map(item => ({ ...item, movement: "Entrada recebida" })), ...parts.expensePaid.map(item => ({ ...item, sourceCents: item.cents, cents: -item.cents, movement: "Saída paga" }))];
+    const pending = [...parts.incomeExpected.map(item => ({ ...item, movement: "Entrada prevista" })), ...parts.expensePending.map(item => ({ ...item, sourceCents: item.cents, cents: -item.cents, movement: "Saída pendente" }))];
     // A referência representa o fechamento do dia: movimentos desse dia já estão incluídos.
     const realizedUntil = date => realized.filter(item => !item.inReference && item.date && item.date > reference.date && item.date <= date);
     parts.available = realizedUntil(today);
-    parts.projected = [...realizedUntil(target), ...pending.filter(item => item.date && item.date <= target)];
+    const pendingUntilTarget = pending.filter(item => item.date && item.date <= target);
+    parts.projected = [...parts.available, ...pendingUntilTarget];
+    const baseline = { label: "Saldo bancário de referência", cents: reference.cents, effectCents: reference.cents, date: reference.date, effectLabel: "Ponto de partida" };
+    const cashDetails = realized.map(item => {
+      const included = parts.available.includes(item);
+      const inReference = item.inReference || (item.date && item.date <= reference.date);
+      const note = inReference ? "Já considerada no saldo de referência — não soma novamente." : !item.date ? "Sem data — não altera o saldo. Informe a data real." : item.date > today ? "Data posterior a hoje — não altera o saldo disponível." : "";
+      return { ...item, inReference, effectCents: included ? item.cents : 0, effectLabel: included ? item.cents < 0 ? "Subtrai do saldo" : "Soma ao saldo" : "Não altera o resultado", note };
+    });
+    const pendingDetails = projected => pending.map(item => {
+      const included = projected && pendingUntilTarget.includes(item);
+      const income = item.movement === "Entrada prevista";
+      const note = income ? "Prevista — incluída somente na projeção" : "Pendente — incluída somente na projeção";
+      return { ...item, effectCents: included ? item.cents : 0, effectLabel: included ? item.cents < 0 ? "Subtrai do saldo" : "Soma ao saldo" : "Não altera o resultado", note: `${note}${!item.date ? ". Sem data: fora do cálculo." : item.date > target ? ". Após a data da projeção: fora deste cálculo." : "."}` };
+    });
+    parts.availableDetails = [baseline, ...cashDetails, ...pendingDetails(false)];
+    parts.projectedDetails = [baseline, ...cashDetails, ...pendingDetails(true)];
     const incomeReceived = InvoiceMath.sum(parts.incomeReceived);
     const incomeExpected = InvoiceMath.sum(parts.incomeExpected);
     const expensePaid = InvoiceMath.sum(parts.expensePaid);
@@ -545,6 +561,8 @@ function renderDue() {
   $("toggle-payment").textContent = partial ? "Desfazer pagamento" : paid ? "Marcar como não paga" : "Marcar como paga";
   $("toggle-payment").setAttribute("aria-pressed", String(confirmed));
   $("correct-payment").hidden = !confirmed;
+  $("invoice-summary-status").textContent = partial ? "Pagamento parcial" : paid ? "Paga" : "Em aberto";
+  $("invoice-summary-status").dataset.status = partial ? "partial" : paid ? "paid" : "open";
   $("visual-card-period").textContent = periodLabel(state.period);
   $("visual-card-total").textContent = currency(finance.invoice);
   $("visual-card-status").textContent = partial ? "Pagamento parcial" : paid ? "Fatura paga" : "Fatura em aberto";
@@ -1154,7 +1172,7 @@ function renderSalary() {
     card.append(heading, expectedValue, amountLine, date, actions);
     const impact = document.createElement("div");
     impact.className = "receipt-impact-note";
-    impact.textContent = !receipt.received ? "Escolha o impacto no saldo ao confirmar o recebimento." : receipt.includeInBalance === false ? "Já considerado no saldo de referência — não soma novamente ao saldo." : "Incluído nos cálculos do saldo · respeita a data de referência";
+    impact.textContent = !receipt.received ? "Escolha o impacto no saldo ao confirmar o recebimento." : receipt.includeInBalance === false ? "Já considerada no saldo de referência — não soma novamente." : "Incluído nos cálculos do saldo · respeita a data de referência";
     if (receipt.received) date.textContent += ` · Previsão original: ${currency(receipt.expectedCents)}`;
     card.classList.add("quarter-column");
     card.append(impact);
@@ -1295,12 +1313,13 @@ $("card-upload").addEventListener("change", async () => {
   const file = $("card-upload").files?.[0];
   if (!file) return;
   try {
-    if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type) || file.size > 10 * 1024 * 1024) throw new Error("Envie uma imagem PNG, JPEG, WebP ou AVIF de até 10 MB.");
+    if (file.size > 2 * 1024 * 1024) throw new Error("A imagem ultrapassa o tamanho máximo de 2 MB. Escolha um arquivo menor. A imagem anterior foi mantida.");
+    if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type)) throw new Error("Formato incompatível. Envie uma imagem PNG, JPEG, WebP ou AVIF de até 2 MB.");
     const url = URL.createObjectURL(file);
     const image = new Image();
     try {
       image.src = url;
-      await image.decode();
+      try { await image.decode(); } catch { throw new Error("Não foi possível ler esta imagem. Use um arquivo PNG, JPEG, WebP ou AVIF válido."); }
       if (!image.naturalWidth || image.naturalWidth * image.naturalHeight > 40000000) throw new Error("A imagem é grande demais. Use uma versão com até 40 megapixels.");
       const scale = Math.min(1, 1280 / image.naturalWidth, 1280 / image.naturalHeight);
       const canvas = document.createElement("canvas");
@@ -1430,7 +1449,7 @@ let explanationTimer;
 let suppressExplanationFocus = false;
 function explanationData(key) {
   const finance = financeFor();
-  const basic = { title: HELP_TITLES[key] ?? "Detalhes do indicador", amount: finance[key], items: finance.parts[key] ?? [], note: `Período: ${periodLabel(state.period)}.` };
+  const basic = { invoiceStatus: key === "invoice" ? (state.payments[state.period] ? finance.invoiceRemaining > 0 ? "Pagamento parcial" : "Paga" : "Em aberto") : null, title: HELP_TITLES[key] ?? "Detalhes do indicador", amount: finance[key], items: finance.parts[key] ?? [], note: `Período: ${periodLabel(state.period)}.` };
   const formulas = {
     invoice: "Soma das compras no cartão. O pagamento da fatura não é outra compra.",
     incomeExpected: "Entradas previstas e quinzenas ainda não recebidas. O salário bruto não entra na soma.",
@@ -1440,8 +1459,8 @@ function explanationData(key) {
     spending: "Todas as despesas do mês. Compras no cartão entram uma vez; o pagamento da fatura não é somado de novo."
   };
   if (key === "available" || key === "projected") {
-    basic.items = [{ label: "Saldo bancário de referência", cents: finance.reference.cents, date: finance.reference.date }, ...finance.parts[key]];
-    basic.formula = key === "available" ? `Referência + entradas recebidas − saídas pagas, posteriores a ${displayDate(finance.reference.date)} e até ${displayDate(finance.today)}.` : `Referência + movimentos realizados posteriores até ${displayDate(finance.target)} + entradas e saídas pendentes até essa data.`;
+    basic.items = finance.parts[key === "available" ? "availableDetails" : "projectedDetails"];
+    basic.formula = key === "available" ? `Referência + entradas recebidas − saídas pagas, posteriores a ${displayDate(finance.reference.date)} e até ${displayDate(finance.today)}.` : `Saldo disponível agora + entradas previstas − saídas pendentes até ${displayDate(finance.target)}. Itens com impacto zero ficam visíveis para explicar as exclusões.`;
     basic.note += ` ${finance.alreadyIncluded.length} movimento(s) já considerados no saldo de referência estão incluídos nele e não são somados de novo. A referência considera o fim do dia. Recebimentos marcados como já considerados nela também ficam fora dos saldos, independentemente da data real.`;
     if (finance.undated.length) basic.note += ` ${finance.undated.length} movimento(s) sem data ficam fora dos saldos. Preencha as datas para incluí-los com segurança.`;
     if (!state.balanceRefs[state.period]) basic.note += " Saldo bancário ainda não informado: referência inicial zero.";
@@ -1484,6 +1503,9 @@ function refreshExplanation() {
   try { data = explanationData(explanationButton.dataset.help); }
   catch (error) { data = { title: "Consulta fora do limite", formula: error.message, items: [], amount: null, note: "Os dados financeiros permanecem intactos." }; }
   $("detail-title").textContent = data.title;
+  $("detail-invoice-status").hidden = !data.invoiceStatus;
+  $("detail-invoice-status").textContent = data.invoiceStatus ?? "";
+  $("detail-invoice-status").dataset.status = data.invoiceStatus === "Paga" ? "paid" : data.invoiceStatus === "Pagamento parcial" ? "partial" : "open";
   $("detail-formula").textContent = data.formula;
   $("detail-items").replaceChildren();
   for (const item of data.items) {
@@ -1494,10 +1516,12 @@ function refreshExplanation() {
     const date = document.createElement("small");
     date.textContent = `${item.date ? displayDate(item.date) : "Sem data"}${item.movement ? ` · ${item.movement}` : ""}${item.undefinedValue ? " · valor não definido" : ""}`;
     const value = document.createElement("strong");
-    value.textContent = currency(item.cents);
-    value.classList.toggle("negative-value", item.cents < 0);
+    const impact = item.effectCents ?? item.cents;
+    value.textContent = currency(impact);
+    value.classList.toggle("negative-value", impact < 0);
+    if (item.effectLabel) date.textContent += ` · ${item.effectLabel} · valor informado: ${currency(item.sourceCents ?? item.cents)}`;
     row.append(description, value, date);
-    if (item.inReference) { const notice = document.createElement("small"); notice.className = "reference-receipt-note"; notice.textContent = "Já considerado no saldo de referência — não soma novamente ao saldo."; row.append(notice); }
+    if (item.note || item.inReference) { const notice = document.createElement("small"); notice.className = "reference-receipt-note"; notice.textContent = item.note || "Já considerada no saldo de referência — não soma novamente. O valor permanece no histórico recebido."; row.append(notice); }
     $("detail-items").append(row);
   }
   if (!data.items.length) $("detail-items").textContent = "Nenhum item considerado neste total.";

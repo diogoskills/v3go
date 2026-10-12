@@ -73,7 +73,7 @@ with sync_playwright() as playwright:
         assert page.locator('.nav-link.active').get_attribute('href') == href
     # Semantic indicator backgrounds and financial behavior remain unchanged.
     colors = page.locator('.summary .card').evaluate_all('cards => cards.map(c => getComputedStyle(c).color)')
-    assert len(set(colors)) == 6
+    assert len(set(colors)) == 7
     assert 'rgb(48, 35, 67)' in page.locator('.total-card').evaluate('card => getComputedStyle(card).backgroundImage')
     page.locator('#bank-balance').focus()
     focus = page.locator('#bank-balance').evaluate('(input) => ({border:getComputedStyle(input).borderColor,shadow:getComputedStyle(input).boxShadow})')

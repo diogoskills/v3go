@@ -29,7 +29,7 @@ O resumo do período diferencia:
 - **Saídas previstas:** saídas fora do cartão pendentes mais o valor ainda devido na fatura.
 - **Saídas pagas:** saídas fora do cartão pagas mais o pagamento registrado da fatura, uma única vez.
 - **Saldo disponível do mês:** saldo bancário de referência mais entradas recebidas menos saídas pagas, somente com data posterior à referência e até hoje.
-- **Saldo previsto:** saldo de referência, movimentos realizados posteriores até a data escolhida e entradas/saídas ainda pendentes até esse dia.
+- **Saldo previsto:** saldo disponível agora mais entradas previstas menos saídas pendentes até a data da projeção.
 - **Gastos do mês:** todas as saídas, incluindo compras no cartão uma única vez. O pagamento da fatura não é somado como outra despesa.
 
 Uma compra no cartão entra nos gastos e na fatura, mas não desconta dinheiro disponível imediatamente. Seu status individual no cartão também não gera essa saída de dinheiro. Use o botão de pagamento da fatura para registrar a movimentação; não cadastre a mesma fatura novamente como uma despesa manual.
@@ -46,7 +46,7 @@ Logo abaixo do cabeçalho, informe o saldo disponível no banco e sua data de re
 
 A referência representa o **final do dia informado**. Movimentos realizados nessa data ou antes dela já estão incluídos no saldo e não são somados ou descontados novamente. Somente movimentos realizados em datas posteriores e até hoje alteram o saldo disponível. Se houver novas movimentações no mesmo dia da referência, atualize o saldo bancário informado; a aplicação não tem horários para distinguir movimentações dentro desse dia.
 
-Escolha a data de previsão, igual ou posterior à referência. O saldo previsto considera os movimentos realizados após a referência até essa data e as entradas/saídas ainda pendentes com vencimento ou data prevista até ela, inclusive pendências vencidas. Considera somente o mês e ano selecionados. As quinzenas não recebidas entram como previsões, sem o salário bruto; depois da confirmação, sua entrada real substitui a previsão no cálculo.
+Escolha a data de previsão, igual ou posterior à referência. O saldo previsto parte do disponível agora e acrescenta entradas previstas, descontando saídas pendentes com vencimento ou data prevista até a data escolhida, inclusive pendências vencidas. Não antecipa movimentos confirmados com data futura nem reconstrói o disponível no passado. Considera somente o mês e ano selecionados. As quinzenas não recebidas entram como previsões, sem o salário bruto; depois da confirmação, sua entrada real substitui a previsão no cálculo.
 
 Exemplo de verificação solicitado: referência de R$ 1.000,00 no dia 12, saída pendente de R$ 644,72 até o dia 15 e segunda quinzena prevista de R$ 750,00 nesse dia resultam em **R$ 1.105,28**. A primeira quinzena, recebida antes da referência, já está incluída nela e não entra de novo.
 
@@ -58,11 +58,19 @@ Os indicadores têm um botão **?**, acessível por hover, foco de teclado ou to
 
 As categorias de filtro ficam em uma única faixa com rolagem horizontal, botões laterais e navegação por toque, sem ampliar a página. Filtros continuam afetando somente a tabela.
 
+## Detalhamento dos indicadores e status
+
+**Entradas recebidas** soma somente confirmações, inclusive quinzenas já refletidas no saldo. A referência bancária não é uma entrada. **Saldo disponível** soma a referência e os movimentos efetivos posteriores a ela e até hoje, excluindo recebimentos já considerados. **Saldo previsto** usa esse disponível e adiciona somente o impacto das previsões/pendências até a data escolhida.
+
+Nos detalhes dos saldos, todos os recebimentos, quinzenas e pagamentos ficam visíveis, incluindo itens sem impacto. Cada linha mostra **Soma**, **Subtrai** ou **Não altera o resultado**. O valor à direita é o impacto no total: valores excluídos aparecem como R$ 0,00, com seu valor informado e motivo abaixo. Assim, a soma dos impactos corresponde exatamente ao cartão. Quinzenas não recebidas indicam **Prevista — incluída somente na projeção**. A referência e a primeira quinzena já considerada, sem outros movimentos, resultam em R$ 855,56 disponível e R$ 1.606,40 previsto ao somar a segunda previsão de R$ 750,84.
+
+Quando a fatura é integralmente paga, **Paga** aparece em verde no cartão **Total da fatura** e no seu **?**, mantendo o valor da fatura. Desfazer restaura **Em aberto**; pagamentos parciais mantêm sua indicação específica. Saídas previstas usam âmbar/laranja suave; saídas pagas permanecem vermelhas.
+
 ## Cartão visual
 
 O cartão usa uma imagem ilustrativa com identidade Nubank, criada para a interface e incorporada ao CSS. Não é um cartão real nem uma imagem oficial fornecida pelo banco. O fundo ocupa toda a área com `cover`, proporção de cartão e posicionamento central, sem esticar. Um blur sutil é aplicado somente à camada de fundo, padrão ou personalizada. A camada de contraste e os textos permanecem nítidos. Ao lado do cartão ficam vencimento, status, a ação de pagamento e, quando necessário, a correção do pagamento. Não há controles de vinculação a quinzenas.
 
-**Trocar imagem** aceita PNG, JPEG, WebP ou AVIF do dispositivo, até 10 MB. A imagem é validada, reduzida proporcionalmente e armazenada como JPEG para limitar o uso de espaço. **Restaurar padrão** remove somente a personalização. Não são solicitados número de cartão, código de segurança ou dados bancários.
+**Trocar imagem** aceita PNG, JPEG, WebP ou AVIF do dispositivo, até **2 MB** (2 × 1024 × 1024 bytes). O aviso aparece junto ao envio. O tamanho é verificado antes da criação da URL, leitura/decodificação ou salvamento; formato inválido, imagem ilegível ou arquivo acima do limite preservam a imagem anterior. O blur de 2 px afeta somente o fundo, mantendo textos e controles nítidos. A imagem é validada, reduzida proporcionalmente e armazenada como JPEG para limitar o uso de espaço. **Restaurar padrão** remove somente a personalização. Não são solicitados número de cartão, código de segurança ou dados bancários.
 
 ## Salário e quinzenas
 
@@ -97,13 +105,13 @@ A ação **Corrigir pagamento da fatura** fica junto ao vencimento/status quando
 
 ## Entradas previstas e recorrentes
 
-Uma entrada **Prevista** compõe as previsões conforme sua data, sem aumentar o disponível. Use **Receber** na linha ou edite para **Recebida**: o mesmo ID é mantido e a escolha de inclusão no saldo é obrigatória. Entradas já consideradas na referência permanecem nos totais históricos e são excluídas somente dos saldos. O aviso **Já considerado no saldo de referência — não soma novamente ao saldo.** aparece junto ao item em **? Entradas recebidas** e no cartão da quinzena correspondente.
+Uma entrada **Prevista** compõe as previsões conforme sua data, sem aumentar o disponível. Use **Receber** na linha ou edite para **Recebida**: o mesmo ID é mantido e a escolha de inclusão no saldo é obrigatória. Entradas já consideradas na referência permanecem nos totais históricos e são excluídas somente dos saldos. O aviso **Já considerada no saldo de referência — não soma novamente.** aparece junto ao item em **? Entradas recebidas** e no cartão da quinzena correspondente.
 
 No formulário de uma entrada, marque **Entrada recorrente mensal** e informe o dia de 1 a 31. A data do primeiro lançamento é a informada no formulário; o dia configurado vale para as próximas previsões. O padrão gera uma previsão por mês a partir do período selecionado, quando esse mês é aberto. Dias inexistentes usam o último dia. Recarregar não duplica previsões e recebimentos confirmados de outros meses permanecem intactos. Editar um padrão afeta os próximos meses ainda não gerados; lançamentos gerados são preservados. Excluir a entrada de um mês impede sua recriação naquele período. **Parar recorrência**, nas Configurações, interrompe novas previsões e mantém as antigas. O módulo de salário continua independente e seus recebimentos não oferecem uma segunda recorrência.
 
 ## Categorias, etiquetas e vencimento
 
-A engrenagem no cabeçalho abre todas as Configurações em um modal com fundo desfocado, fechamento por botão, Esc ou clique fora e rolagem interna. Categorias e etiquetas são globais, com criação no formulário e gerenciamento nas Configurações. Nomes vazios, duplicados ou reservados são rejeitados; a comparação normaliza espaços, maiúsculas, minúsculas e acentos. Renomear atualiza os vínculos; excluir pede confirmação e permite transferir ou deixar sem classificação, preservando lançamentos e valores.
+O botão **Configurações**, com engrenagem, fundo, borda e estados de hover/foco no cabeçalho, abre todas as Configurações em um modal com fundo desfocado, fechamento por botão, Esc ou clique fora e rolagem interna. Categorias e etiquetas são globais, com criação no formulário e gerenciamento nas Configurações. Nomes vazios, duplicados ou reservados são rejeitados; a comparação normaliza espaços, maiúsculas, minúsculas e acentos. Renomear atualiza os vínculos; excluir pede confirmação e permite transferir ou deixar sem classificação, preservando lançamentos e valores.
 
 O vencimento padrão é dia 05, editável entre 1 e 31 para todos os meses. Quando o dia não existe, usa-se o último dia. A barra considera o intervalo entre os vencimentos consecutivos, com datas locais e diferenças em dias civis. Texto e cores distinguem proximidade, data passada, pagamento parcial e fatura paga.
 
@@ -151,11 +159,13 @@ A suíte `tests/check_receipt_balance.py` verifica recolhimento/edição/persist
 
 A suíte `tests/check_registry_features.py` verifica configurações em modal, IDs e desempate, filtros preservados, múltiplas etiquetas/migração/transferência, resumo contextual de categorias, aviso nos recebimentos, salário recolhido, recorrências por mês/ano sem duplicidade, exclusão sem recriação, interrupção de padrões, validação e textos tratados sem execução de HTML.
 
-Para executar, use `python tests/check_browser.py`, `python tests/check_redesign.py`, `python tests/check_receipt_balance.py` e `python tests/check_registry_features.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
+A suíte `tests/check_indicator_details.py` confere o exemplo de R$ 1.606,40, a soma dos impactos de cada detalhamento, projeção a partir do disponível atual, status de pagamento/reversão, cores, limite de 2 MB antes da decodificação, formatos/arquivos inválidos, persistência e funcionamento no celular.
+
+Para executar, use `python tests/check_indicator_details.py`, `python tests/check_browser.py`, `python tests/check_redesign.py`, `python tests/check_receipt_balance.py` e `python tests/check_registry_features.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
 
 ## Arquivos
 
 - `v3go web/index.html`, `style.css`, `script.js`: aplicação completa.
 - `v3go web.zip`: cópia dos três arquivos para distribuição.
-- `tests/check_browser.py`, `tests/check_redesign.py` e `tests/check_receipt_balance.py` e `tests/check_registry_features.py`: regressão financeira e de interface.
+- `tests/check_browser.py`, `tests/check_redesign.py` e `tests/check_receipt_balance.py` e `tests/check_registry_features.py` e `tests/check_indicator_details.py`: regressão financeira e de interface.
 - `New Fatura Junho 2026.xlsx` e `prompt.txt`: referência histórica, sem importação automática.

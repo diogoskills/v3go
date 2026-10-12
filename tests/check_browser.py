@@ -409,7 +409,7 @@ with sync_playwright() as playwright:
     add(sample,"Pagamento já incluído","20,00",method="pix",status="paid",date="2026-10-11")
     add(sample,"Pagamento posterior","10,00",method="pix",status="paid",date="2026-10-13")
     assert finance(sample)["available"] == 100000
-    assert finance(sample)["projected"] == 114528
+    assert finance(sample)["projected"] == 110528  # Future dated confirmations do not alter available now.
     sample.clock.set_system_time(datetime(2026,10,14,15))
     sample.evaluate("refreshFinancialIndicators()")
     assert finance(sample)["available"] == 104000
@@ -463,7 +463,7 @@ with sync_playwright() as playwright:
     touch.locator("#categories-prev").tap()
     touch.wait_for_function("document.getElementById('category-tabs').scrollLeft<2")
     assert touch.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    assert touch.locator("#card-background").evaluate("e=>getComputedStyle(e).filter") == "blur(1.3px)"
+    assert touch.locator("#card-background").evaluate("e=>getComputedStyle(e).filter") == "blur(2px)"
     assert touch.locator(".card-live").evaluate("e=>getComputedStyle(e).filter") == "none"
     assert touch.locator("#credit-card").evaluate("e=>getComputedStyle(e).filter") == "none"
     assert touch.locator("#invoice-funding").count() == 0
