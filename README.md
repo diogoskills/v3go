@@ -16,7 +16,7 @@ A data de um novo lançamento começa na data atual do dispositivo, mesmo se o p
 
 Os cabeçalhos **Tipo** e **Data** são botões: Tipo alterna entradas/saídas primeiro; Data alterna mais recentes/mais antigos primeiro. A seta e o atributo acessível indicam a ordenação ativa. A ordem inicial é por data mais recente. Cada lançamento recebe um **ID sequencial único e permanente**. Datas iguais usam ID maior primeiro em recentes e menor primeiro em antigos. Dentro de cada grupo por Tipo, a ordem é por data mais recente e ID decrescente. IDs não mudam ao editar e não são reutilizados ao excluir; datas históricas não informadas ficam ao final. A ordenação afeta somente a consulta.
 
-Os filtros de tipo, categoria, etiqueta, descrição e a ordenação são preservados ao adicionar, editar, excluir, receber entradas ou pagar faturas. Afetam somente a tabela. Selecionar várias etiquetas não duplica valores; o filtro encontra qualquer lançamento que contenha a etiqueta escolhida. Na faixa de categorias de Lançamentos, hover ou foco mostra quantidade e soma do período com os filtros ativos de tipo, etiqueta e busca, ignorando a categoria anteriormente selecionada. O resumo só aparece quando há algum valor preenchido. A soma dos valores exibidos é uma consulta de valores, não um saldo líquido. A composição e a soma personalizada por categorias continuam disponíveis e consideram somente as compras no cartão que compõem a fatura.
+Os filtros de tipo, categoria, etiqueta, descrição e a ordenação são preservados ao adicionar, editar, excluir, receber entradas ou pagar faturas. Afetam somente a tabela. Selecionar várias etiquetas não duplica valores; o filtro encontra qualquer lançamento que contenha a etiqueta escolhida. Na faixa de categorias de Lançamentos, hover ou foco mostra quantidade e soma do período com os filtros ativos de tipo, etiqueta e busca, ignorando a categoria anteriormente selecionada. O resumo só aparece quando há algum valor preenchido. A soma dos valores exibidos é uma consulta de valores, não um saldo líquido. A composição continua mostrando as compras no cartão. A seção **Simular gastos**, na sidebar e em **Ver gastos** no header, soma as despesas do mês por categorias, incluindo cartão e outros meios, sem contar o pagamento da fatura como outra despesa. Todas as categorias, inclusive as sem valores e “Sem categoria” quando necessário, têm subtotal e seleção. Os gastos reais e a fatura real ficam visíveis; a consulta não altera dados nem segue os filtros temporários da tabela.
 
 Valores em branco ficam fora dos cálculos; uma confirmação de novo lançamento precisa de um valor. Valores negativos permitem ajustes e invertem o efeito do lançamento. Os cálculos e a formatação usam centavos inteiros, sem arredondar valores monetários intermediários.
 
@@ -28,13 +28,13 @@ O resumo do período diferencia:
 - **Entradas recebidas:** lançamentos recebidos mais os valores reais das quinzenas confirmadas.
 - **Saídas previstas:** saídas fora do cartão pendentes mais o valor ainda devido na fatura.
 - **Saídas pagas:** saídas fora do cartão pagas mais o pagamento registrado da fatura, uma única vez.
-- **Saldo disponível do mês:** saldo bancário de referência mais entradas recebidas menos saídas pagas, somente com data posterior à referência e até hoje.
+- **Saldo disponível do mês:** saldo bancário de referência mais entradas recebidas menos saídas pagas, até hoje, respeitando o que já está incluído na referência e a inclusão explícita dos movimentos do mesmo dia.
 - **Saldo previsto:** saldo disponível agora mais entradas previstas menos saídas pendentes até a data da projeção.
 - **Gastos do mês:** todas as saídas, incluindo compras no cartão uma única vez. O pagamento da fatura não é somado como outra despesa.
 
 Uma compra no cartão entra nos gastos e na fatura, mas não desconta dinheiro disponível imediatamente. Seu status individual no cartão também não gera essa saída de dinheiro. Use o botão de pagamento da fatura para registrar a movimentação; não cadastre a mesma fatura novamente como uma despesa manual.
 
-O pagamento pede valor e data reais e pode ser corrigido ou desfeito. O valor pago fica registrado: alterar compras depois não muda silenciosamente a saída de dinheiro já confirmada. Se houver restante positivo, o resumo inclui-o nas saídas previstas e a fatura mostra “Pagamento parcial”. Um valor acima da fatura permanece como pagamento informado, com a diferença visível para revisão. Não são gerados lançamentos duplicados de despesa.
+O pagamento apresenta o saldo restante em campo cinza **somente leitura** e sugere a data atual do dispositivo. O cálculo usa o restante registrado, mesmo se o campo for alterado externamente. Só a data é editável. Pagamentos anteriores continuam registrados com seus valores e datas; a quitação complementar soma uma nova parcela ao histórico. Se já estiver quitada, **Corrigir pagamento da fatura** permite corrigir apenas a data do último pagamento. Desfazer desativa os registros, preservando o histórico, sem criar outra despesa. Pagamentos legados são convertidos em um registro histórico sem mudar valor ou data. Pagamentos acima do total, já salvos, são preservados; não são criados por esse fluxo.
 
 Os saldos partem do valor bancário informado pelo usuário para o período selecionado. Não há integração bancária nem carregamento automático do saldo de outro mês. Cada registro pertence ao período selecionado, mesmo se sua data real for anterior, como em um recebimento antecipado. O salário não paga automaticamente a fatura.
 
@@ -44,7 +44,7 @@ A lógica financeira está separada da interface em `InvoiceMath` e `FinanceMath
 
 Logo abaixo do cabeçalho, informe o saldo disponível no banco e sua data de referência, inicialmente hoje. Depois de salvar, o formulário recolhe para um resumo discreto com valor, data e **Editar saldo**. A previsão por data permanece acessível. O formulário fica aberto nos meses sem saldo informado; saldos já existentes aparecem recolhidos ao reabrir o site. A referência e a data de previsão são salvas por mês e ano, sem misturar períodos. Enquanto o saldo não for informado, é usado zero com um aviso claro.
 
-A referência representa o **final do dia informado**. Movimentos realizados nessa data ou antes dela já estão incluídos no saldo e não são somados ou descontados novamente. Somente movimentos realizados em datas posteriores e até hoje alteram o saldo disponível. Se houver novas movimentações no mesmo dia da referência, atualize o saldo bancário informado; a aplicação não tem horários para distinguir movimentações dentro desse dia.
+Movimentos anteriores à referência já estão incluídos no saldo. Para os do mesmo dia, o formulário mostra uma lista revisável: marque os que já estão no valor bancário e desmarque os que ainda devem movimentá-lo. Novos recebimentos com **Incluir no saldo** podem somar no mesmo dia; **Apenas marcar como recebida** exclui o impacto. Novos pagamentos no mesmo dia são descontados uma vez, salvo quando marcados na revisão como já incluídos. Registros antigos sem informação explícita mantêm o comportamento anterior: a referência considera o fechamento do dia. Atualizar o valor bancário exige revisar essa lista para refletir o que ele contém. Não são inventados horários para movimentos antigos.
 
 Escolha a data de previsão, igual ou posterior à referência. O saldo previsto parte do disponível agora e acrescenta entradas previstas, descontando saídas pendentes com vencimento ou data prevista até a data escolhida, inclusive pendências vencidas. Não antecipa movimentos confirmados com data futura nem reconstrói o disponível no passado. Considera somente o mês e ano selecionados. As quinzenas não recebidas entram como previsões, sem o salário bruto; depois da confirmação, sua entrada real substitui a previsão no cálculo.
 
@@ -62,7 +62,7 @@ As categorias de filtro ficam em uma única faixa com rolagem horizontal, botõe
 
 **Entradas recebidas** soma somente confirmações, inclusive quinzenas já refletidas no saldo. A referência bancária não é uma entrada. **Saldo disponível** soma a referência e os movimentos efetivos posteriores a ela e até hoje, excluindo recebimentos já considerados. **Saldo previsto** usa esse disponível e adiciona somente o impacto das previsões/pendências até a data escolhida.
 
-Nos detalhes dos saldos, todos os recebimentos, quinzenas e pagamentos ficam visíveis, incluindo itens sem impacto. Cada linha mostra **Soma**, **Subtrai** ou **Não altera o resultado**. O valor à direita é o impacto no total: valores excluídos aparecem como R$ 0,00, com seu valor informado e motivo abaixo. Assim, a soma dos impactos corresponde exatamente ao cartão. Quinzenas não recebidas indicam **Prevista — incluída somente na projeção**. A referência e a primeira quinzena já considerada, sem outros movimentos, resultam em R$ 855,56 disponível e R$ 1.606,40 previsto ao somar a segunda previsão de R$ 750,84.
+Nos detalhes dos saldos, todos os recebimentos, quinzenas e pagamentos ficam visíveis, incluindo itens sem impacto. Cada linha mostra **Soma**, **Subtrai** ou **Não altera o resultado**. Quando não há previsões ou pendências até a data consultada, o indicador informa **Sem movimentações previstas: igual ao saldo disponível.** O valor à direita é o impacto no total: valores excluídos aparecem como R$ 0,00, com seu valor informado e motivo abaixo. Assim, a soma dos impactos corresponde exatamente ao cartão. Quinzenas não recebidas indicam **Prevista — incluída somente na projeção**. A referência e a primeira quinzena já considerada, sem outros movimentos, resultam em R$ 855,56 disponível e R$ 1.606,40 previsto ao somar a segunda previsão de R$ 750,84.
 
 Quando a fatura é integralmente paga, **Paga** aparece em verde no cartão **Total da fatura** e no seu **?**, mantendo o valor da fatura. Desfazer restaura **Em aberto**; pagamentos parciais mantêm sua indicação específica. Saídas previstas usam âmbar/laranja suave; saídas pagas permanecem vermelhas.
 
@@ -96,12 +96,12 @@ As duas quinzenas ficam lado a lado no computador e empilhadas no celular, orden
 
 Em toda confirmação ou correção, escolha explicitamente:
 
-- **Incluir no saldo:** o recebimento participa dos cálculos conforme as datas. Valores realizados na referência ou antes dela já estão no saldo informado e continuam excluídos para evitar duplicidade.
+- **Incluir no saldo:** o recebimento participa dos cálculos conforme as datas. Movimentos anteriores à referência continuam excluídos; no mesmo dia, uma escolha explícita de inclusão soma o recebimento, a menos que ele esteja marcado na revisão como já incluído.
 - **Apenas marcar como recebida:** o valor já está refletido no saldo informado e não é adicionado ao saldo disponível nem ao previsto, independentemente da data real. A entrada permanece no histórico e nos totais de entradas recebidas, com a indicação **Já considerado no saldo de referência**.
 
-A escolha é independente por quinzena, mês e ano; pode ser alterada em **Corrigir recebimento**, sem criar outra entrada. Editar a entrada vinculada mantém a escolha. Desfazer/excluir mantém a sincronia com a quinzena. Em uma base antiga sem essa opção, o comportamento anterior é preservado: inclusão conforme a data de referência. Nenhum recebimento salvo é excluído automaticamente. O bruto permanece somente uma referência e não gera entrada adicional.
+A escolha é independente por quinzena, mês e ano; pode ser alterada em **Corrigir recebimento**, sem criar outra entrada. Ao reabrir, a opção salva aparece selecionada; trocar a opção atualiza a mensagem explicativa sem gravar até confirmar. Cancelar preserva a escolha salva. Editar a entrada vinculada mantém a escolha. Desfazer/excluir mantém a sincronia com a quinzena. Em uma base antiga sem essa opção, o comportamento anterior é preservado: inclusão conforme a data de referência. Nenhum recebimento salvo é excluído automaticamente. O bruto permanece somente uma referência e não gera entrada adicional.
 
-A ação **Corrigir pagamento da fatura** fica junto ao vencimento/status quando existe um pagamento, preservando a correção de valor e data após remover as listas de compromissos.
+A ação **Corrigir pagamento da fatura** fica junto ao vencimento/status quando existe um pagamento, preservando a correção da data; o valor desse pagamento permanece bloqueado. Se houver saldo restante, **Quitar saldo restante** registra sua quitação mantendo os pagamentos anteriores.
 
 ## Entradas previstas e recorrentes
 
@@ -113,11 +113,13 @@ No formulário de uma entrada, marque **Entrada recorrente mensal** e informe o 
 
 O botão **Configurações**, com engrenagem, fundo, borda e estados de hover/foco no cabeçalho, abre todas as Configurações em um modal com fundo desfocado, fechamento por botão, Esc ou clique fora e rolagem interna. Categorias e etiquetas são globais, com criação no formulário e gerenciamento nas Configurações. Nomes vazios, duplicados ou reservados são rejeitados; a comparação normaliza espaços, maiúsculas, minúsculas e acentos. Renomear atualiza os vínculos; excluir pede confirmação e permite transferir ou deixar sem classificação, preservando lançamentos e valores.
 
-O vencimento padrão é dia 05, editável entre 1 e 31 para todos os meses. Quando o dia não existe, usa-se o último dia. A barra considera o intervalo entre os vencimentos consecutivos, com datas locais e diferenças em dias civis. Texto e cores distinguem proximidade, data passada, pagamento parcial e fatura paga.
+**Data de fechamento** e **Data de vencimento** são editadas junto à previsão de saldo, fora de Configurações, e salvas por mês e ano. Uma base nova sugere vencimento dia 05 do mês selecionado e fechamento sete dias antes, marcado como sugestão editável. O fechamento deve ser anterior ao vencimento. Preferências de vencimento anteriores são preservadas. Datas salvas aparecem completas no cartão da fatura. Na ausência de fechamento antigo, a sugestão não é apresentada como um fato histórico.
+
+Alterar o vencimento de uma fatura aberta muda a data da pendência na projeção. As compras continuam no mês/ano em que foram cadastradas: a aplicação não redistribui lançamentos por ciclos nem move faturas históricas. Essa regra fica explícita no formulário. Faturas com pagamento confirmado mantêm suas datas bloqueadas; a edição afeta somente a fatura aberta selecionada.
 
 ## Armazenamento e migração
 
-A versão atual usa `v3go.invoice.v5` em `localStorage`, contendo lançamentos mensais, categorias/etiquetas, salário padrão, configurações e recebimentos mensais (incluindo a escolha `includeInBalance`), IDs sequenciais e seu contador, listas de etiquetas, padrões recorrentes e configuração salarial recolhida, metadados de planejamento antigos preservados, pagamento da fatura, imagem personalizada, referências de saldo e datas de previsão por mês e ano. Use o mesmo navegador e endereço do site para restaurar esses dados. Não há sincronização entre dispositivos.
+A versão atual usa `v3go.invoice.v5` em `localStorage`, contendo lançamentos mensais, categorias/etiquetas, salário padrão, configurações e recebimentos mensais (incluindo a escolha `includeInBalance`), IDs sequenciais e seu contador, listas de etiquetas, padrões recorrentes e configuração salarial recolhida, metadados de planejamento antigos preservados, pagamento da fatura, imagem personalizada, referências de saldo e datas de previsão, fechamento/vencimento, histórico de pagamentos e revisão dos movimentos no mesmo dia por mês e ano. Use o mesmo navegador e endereço do site para restaurar esses dados. Não há sincronização entre dispositivos.
 
 Registros atuais antigos são normalizados preservando seus identificadores internos e valores: recebem IDs sequenciais, a etiqueta única vira uma lista e escolhas antigas de saldo permanecem conforme as datas.
 
@@ -130,7 +132,7 @@ Versões anteriores são migradas sem apagar dados e suas chaves são mantidas c
 - Datas de lançamentos anteriores, que não existiam, permanecem **Não informada**. Podem ser preenchidas ao editar.
 - Uma base atual válida não reimporta as cópias antigas. Uma base inválida não é sobrescrita silenciosamente: o salvamento é suspenso e há um aviso.
 
-**Apagar dados salvos**, com confirmação, remove lançamentos, pagamentos, vínculos mensais, recebimentos de salário e referências de saldo de todos os meses. Mantém configurações globais legíveis, salário padrão e imagem. Se os dados não podem ser lidos, redefine uma base vazia com padrões. Falhas de gravação são informadas; em caso de falta de espaço, não se promete persistência das alterações da sessão.
+**Apagar dados salvos**, com confirmação, remove lançamentos, pagamentos, vínculos mensais, recebimentos de salário e referências de saldo de todos os meses. Mantém configurações globais legíveis, datas de fatura salvas, salário padrão e imagem. Se os dados não podem ser lidos, redefine uma base vazia com padrões. Falhas de gravação são informadas; em caso de falta de espaço, não se promete persistência das alterações da sessão.
 
 ## Visual e navegação
 
@@ -159,13 +161,15 @@ A suíte `tests/check_receipt_balance.py` verifica recolhimento/edição/persist
 
 A suíte `tests/check_registry_features.py` verifica configurações em modal, IDs e desempate, filtros preservados, múltiplas etiquetas/migração/transferência, resumo contextual de categorias, aviso nos recebimentos, salário recolhido, recorrências por mês/ano sem duplicidade, exclusão sem recriação, interrupção de padrões, validação e textos tratados sem execução de HTML.
 
+A suíte `tests/check_planning_controls.py` verifica simulação sem alterações, valor restante bloqueado, preservação/estorno do histórico, seleção salva e cancelamento dos recebimentos, movimentos no dia da referência, datas/projeção sem transferência de compras, pesquisa/rolagem, igualdade sem previsões, meses e celular.
+
 A suíte `tests/check_indicator_details.py` confere o exemplo de R$ 1.606,40, a soma dos impactos de cada detalhamento, projeção a partir do disponível atual, status de pagamento/reversão, cores, limite de 2 MB antes da decodificação, formatos/arquivos inválidos, persistência e funcionamento no celular.
 
-Para executar, use `python tests/check_indicator_details.py`, `python tests/check_browser.py`, `python tests/check_redesign.py`, `python tests/check_receipt_balance.py` e `python tests/check_registry_features.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
+Para executar, use `python tests/check_planning_controls.py`, `python tests/check_indicator_details.py`, `python tests/check_browser.py`, `python tests/check_redesign.py`, `python tests/check_receipt_balance.py` e `python tests/check_registry_features.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
 
 ## Arquivos
 
 - `v3go web/index.html`, `style.css`, `script.js`: aplicação completa.
 - `v3go web.zip`: cópia dos três arquivos para distribuição.
-- `tests/check_browser.py`, `tests/check_redesign.py` e `tests/check_receipt_balance.py` e `tests/check_registry_features.py` e `tests/check_indicator_details.py`: regressão financeira e de interface.
+- `tests/check_browser.py`, `tests/check_redesign.py` e `tests/check_receipt_balance.py` e `tests/check_registry_features.py` e `tests/check_indicator_details.py` e `tests/check_planning_controls.py`: regressão financeira e de interface.
 - `New Fatura Junho 2026.xlsx` e `prompt.txt`: referência histórica, sem importação automática.

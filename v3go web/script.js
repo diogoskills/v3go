@@ -66,7 +66,7 @@ const normalizeName = name => name.trim().replace(/\s+/g, " ");
 const compareName = name => normalizeName(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
 const validPeriod = period => typeof period === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(period) && Number(period.slice(0, 4)) >= 1;
 const newId = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const emptyState = () => ({ version: 5, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {}, settlements: {}, invoiceFunding: {}, salaryDefaults: JSON.parse(JSON.stringify(DEFAULT_SALARY)), salaryMonths: {}, cardImage: null, balanceRefs: {}, forecastDates: {}, nextSequence: 1, recurrences: [], salaryConfigured: {} });
+const emptyState = () => ({ version: 5, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {}, settlements: {}, invoiceFunding: {}, salaryDefaults: JSON.parse(JSON.stringify(DEFAULT_SALARY)), salaryMonths: {}, cardImage: null, balanceRefs: {}, forecastDates: {}, nextSequence: 1, recurrences: [], salaryConfigured: {}, invoiceDates: {}, paymentHistory: {} });
 
 // Datas locais: diferenças de dias civis evitam erros de horário de verão.
 const DueCalendar = Object.freeze({
@@ -84,9 +84,9 @@ const DueCalendar = Object.freeze({
     civil.setUTCHours(0, 0, 0, 0);
     return civil.getTime() / 86400000;
   },
-  calculate(period, day, today = new Date()) {
+  calculate(period, day, today = new Date(), explicitDue = null) {
     const [year, month] = period.split("-").map(Number);
-    const due = this.date(year, month - 1, day);
+    const due = explicitDue ? parseLocalDate(explicitDue) : this.date(year, month - 1, day);
     const previous = this.date(year, month - 2, day);
     const todaySerial = this.serial(today);
     const start = this.serial(previous);
@@ -171,7 +171,7 @@ function forecastFor(period = state.period, data = state) {
   return end > balanceFor(period, data).date ? end : balanceFor(period, data).date;
 }
 function financialItem(record) {
-  return { label: record.description, cents: record.cents ?? 0, date: record.date, undefinedValue: record.cents === null };
+  return { movementId: record.id, sameDayAddition: record.sameDayAddition ?? false, label: record.description, cents: record.cents ?? 0, date: record.date, undefinedValue: record.cents === null };
 }
 const FinanceMath = Object.freeze({
   safe(value) { if (!Number.isSafeInteger(value)) throw new Error("O resultado excede o limite de cálculo preciso."); return value; },
@@ -189,29 +189,31 @@ const FinanceMath = Object.freeze({
     const invoice = InvoiceMath.sum(credit);
     const invoicePaid = settlement?.cents ?? 0;
     const invoiceRemaining = settlement ? Math.max(this.safe(invoice - invoicePaid), 0) : invoice;
-    const invoiceDate = localDateString(DueCalendar.calculate(period, options.dueDay ?? 5).due);
+    const invoiceDate = options.dueDate ?? localDateString(DueCalendar.calculate(period, options.dueDay ?? 5).due);
     const parts = {
       invoice: credit.map(financialItem),
-      incomeReceived: incomes.filter(record => record.status === "received").map(record => ({ ...financialItem(record), inReference: record.includeInBalance === false || (record.salarySource !== null && salary[record.salarySource]?.includeInBalance === false) })),
+      incomeReceived: incomes.filter(record => record.status === "received").map(record => ({ ...financialItem(record), sameDayAddition: record.sameDayAddition === true || (record.salarySource && salary[record.salarySource]?.balanceChoiceExplicit === true && salary[record.salarySource]?.includeInBalance !== false), inReference: record.includeInBalance === false || (record.salarySource !== null && salary[record.salarySource]?.includeInBalance === false) })),
       incomeExpected: [...incomes.filter(record => record.status === "expected").map(financialItem), ...expectedSalary],
-      expensePaid: [...direct.filter(record => record.status === "paid").map(financialItem), ...(settlement ? [{ label: "Pagamento da fatura", cents: invoicePaid, date: settlement.date }] : [])],
+      expensePaid: [...direct.filter(record => record.status === "paid").map(financialItem), ...(options.paymentEntries ? options.paymentEntries.filter(item => item.active).map(item => ({ movementId: item.id, sameDayAddition: item.sameDayAddition, label: "Pagamento da fatura", cents: item.cents, date: item.date })) : settlement ? [{ label: "Pagamento da fatura", cents: invoicePaid, date: settlement.date }] : [])],
       expensePending: [...direct.filter(record => record.status === "pending").map(financialItem), ...(invoiceRemaining !== 0 ? [{ label: "Fatura ainda a pagar", cents: invoiceRemaining, date: invoiceDate }] : [])],
       spending: expenses.map(financialItem)
     };
     const realized = [...parts.incomeReceived.map(item => ({ ...item, movement: "Entrada recebida" })), ...parts.expensePaid.map(item => ({ ...item, sourceCents: item.cents, cents: -item.cents, movement: "Saída paga" }))];
     const pending = [...parts.incomeExpected.map(item => ({ ...item, movement: "Entrada prevista" })), ...parts.expensePending.map(item => ({ ...item, sourceCents: item.cents, cents: -item.cents, movement: "Saída pendente" }))];
     // A referência representa o fechamento do dia: movimentos desse dia já estão incluídos.
-    const realizedUntil = date => realized.filter(item => !item.inReference && item.date && item.date > reference.date && item.date <= date);
+    const includedInReference = item => item.inReference || (item.date && item.date < reference.date) || (item.date === reference.date && (reference.sameDayIncludedIds ?? []).includes(item.movementId)) || (item.date === reference.date && !(reference.sameDayExcludedIds ?? []).includes(item.movementId) && !item.sameDayAddition);
+    const realizedUntil = date => realized.filter(item => !includedInReference(item) && item.date && item.date >= reference.date && item.date <= date);
     parts.available = realizedUntil(today);
     const pendingUntilTarget = pending.filter(item => item.date && item.date <= target);
     parts.projected = [...parts.available, ...pendingUntilTarget];
     const baseline = { label: "Saldo bancário de referência", cents: reference.cents, effectCents: reference.cents, date: reference.date, effectLabel: "Ponto de partida" };
     const cashDetails = realized.map(item => {
       const included = parts.available.includes(item);
-      const inReference = item.inReference || (item.date && item.date <= reference.date);
+      const inReference = includedInReference(item);
       const note = inReference ? "Já considerada no saldo de referência — não soma novamente." : !item.date ? "Sem data — não altera o saldo. Informe a data real." : item.date > today ? "Data posterior a hoje — não altera o saldo disponível." : "";
       return { ...item, inReference, effectCents: included ? item.cents : 0, effectLabel: included ? item.cents < 0 ? "Subtrai do saldo" : "Soma ao saldo" : "Não altera o resultado", note };
     });
+    for (const entry of options.paymentEntries ?? []) if (!entry.active) cashDetails.push({ label: "Pagamento da fatura (desfeito)", cents: entry.cents, effectCents: 0, date: entry.date, effectLabel: "Não altera o resultado", note: "Registro preservado no histórico; pagamento desfeito." });
     const pendingDetails = projected => pending.map(item => {
       const included = projected && pendingUntilTarget.includes(item);
       const income = item.movement === "Entrada prevista";
@@ -224,12 +226,12 @@ const FinanceMath = Object.freeze({
     const incomeExpected = InvoiceMath.sum(parts.incomeExpected);
     const expensePaid = InvoiceMath.sum(parts.expensePaid);
     const expensePending = InvoiceMath.sum(parts.expensePending);
-    return { invoice, invoicePaid, invoiceRemaining, incomeReceived, incomeExpected, expensePaid, expensePending, spending: InvoiceMath.sum(expenses), available: this.safe(reference.cents + InvoiceMath.sum(parts.available)), projected: this.safe(reference.cents + InvoiceMath.sum(parts.projected)), reference, target, today, parts, undated: [...realized, ...pending].filter(item => !item.date), alreadyIncluded: realized.filter(item => item.inReference || (item.date && item.date <= reference.date)) };
+    return { invoice, invoicePaid, invoiceRemaining, incomeReceived, incomeExpected, expensePaid, expensePending, spending: InvoiceMath.sum(expenses), available: this.safe(reference.cents + InvoiceMath.sum(parts.available)), projected: this.safe(reference.cents + InvoiceMath.sum(parts.projected)), reference, target, today, parts, undated: [...realized, ...pending].filter(item => !item.date), alreadyIncluded: realized.filter(includedInReference) };
   }
 });
 function financeFor(period = state.period, data = state) {
   const salary = data.salaryMonths[period] ?? salarySnapshot(data.salaryDefaults);
-  return FinanceMath.calculate(data.invoices[period] ?? [], salary, data.payments[period] ? data.settlements[period] : null, { period, dueDay: data.dueDay, reference: balanceFor(period, data), target: forecastFor(period, data) });
+  return FinanceMath.calculate(data.invoices[period] ?? [], salary, data.payments[period] ? data.settlements[period] : null, { period, dueDay: data.dueDay, dueDate: invoiceDatesFor(period, data).due, paymentEntries: data.paymentHistory?.[period], reference: balanceFor(period, data), target: forecastFor(period, data) });
 }
 
 function validateSalaryDefaults(data) {
@@ -253,8 +255,9 @@ function validateSalaryMonth(data) {
     if (!receipt || !Number.isSafeInteger(receipt.expectedCents) || receipt.expectedCents < 0 || !Number.isInteger(receipt.day) || receipt.day < 1 || receipt.day > 31 || typeof receipt.received !== "boolean" ||
         (receipt.received && (!Number.isSafeInteger(receipt.actualCents) || receipt.actualCents < 0 || !validDate(receipt.actualDate))) ||
         (!receipt.received && (receipt.actualCents !== null || receipt.actualDate !== null))) throw new Error("Recebimento de quinzena inválido.");
+    if (receipt.balanceChoiceExplicit !== undefined && typeof receipt.balanceChoiceExplicit !== "boolean") throw new Error("Escolha de referência inválida.");
     if (receipt.includeInBalance !== undefined && typeof receipt.includeInBalance !== "boolean") throw new Error("Escolha de impacto no saldo inválida.");
-    result[id] = { expectedCents: receipt.expectedCents, day: receipt.day, received: receipt.received, actualCents: receipt.actualCents, actualDate: receipt.actualDate, includeInBalance: receipt.includeInBalance ?? true };
+    result[id] = { expectedCents: receipt.expectedCents, day: receipt.day, received: receipt.received, actualCents: receipt.actualCents, actualDate: receipt.actualDate, includeInBalance: receipt.includeInBalance ?? true, balanceChoiceExplicit: receipt.balanceChoiceExplicit ?? false };
   }
   FinanceMath.safe(result.first.expectedCents + result.second.expectedCents);
   return result;
@@ -280,7 +283,8 @@ function validateState(data) {
       const income = record?.type === "income";
       const labelIds = record?.labelIds ?? (record?.labelId ? [record.labelId] : []);
       if (!Array.isArray(labelIds) || new Set(labelIds).size !== labelIds.length || labelIds.some(id => !labels.some(label => label.id === id))) throw new Error("Etiquetas inválidas.");
-      if (record.includeInBalance !== undefined && typeof record.includeInBalance !== "boolean") throw new Error("Impacto no saldo inválido.");
+      if (record.sameDayAddition !== undefined && typeof record.sameDayAddition !== "boolean") throw new Error("Inclusão na data de referência inválida.");
+    if (record.includeInBalance !== undefined && typeof record.includeInBalance !== "boolean") throw new Error("Impacto no saldo inválido.");
       if (!record || typeof record.id !== "string" || !record.id || ids.has(record.id) ||
           typeof record.description !== "string" || !record.description.trim() || record.description.length > 200 ||
           (record.categoryId !== null && !categories.some(category => category.id === record.categoryId)) ||
@@ -290,7 +294,7 @@ function validateState(data) {
           (income ? record.paymentMethod !== null : !Object.hasOwn(METHODS, record.paymentMethod)) ||
           (record.funding !== null && !Object.hasOwn(FUNDINGS, record.funding)) || (income && record.funding !== null) || ![null, "first", "second"].includes(record.salarySource)) throw new Error("Lançamento inválido.");
       ids.add(record.id);
-      return { sequenceId: record.sequenceId ?? nextSequence++, labelIds, labelId: labelIds[0] ?? null, includeInBalance: record.includeInBalance ?? true, recurrenceId: record.recurrenceId ?? null, id: record.id, createdOrder: Number.isSafeInteger(record.createdOrder) && record.createdOrder >= 0 ? record.createdOrder : index, description: record.description, categoryId: record.categoryId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding, salarySource: record.salarySource };
+      return { sequenceId: record.sequenceId ?? nextSequence++, labelIds, labelId: labelIds[0] ?? null, includeInBalance: record.includeInBalance ?? true, sameDayAddition: record.sameDayAddition ?? false, recurrenceId: record.recurrenceId ?? null, id: record.id, createdOrder: Number.isSafeInteger(record.createdOrder) && record.createdOrder >= 0 ? record.createdOrder : index, description: record.description, categoryId: record.categoryId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding, salarySource: record.salarySource };
     });
     InvoiceMath.calculate(creditRecords(invoices[period]), categories);
   }
@@ -318,7 +322,9 @@ function validateState(data) {
   const balanceRefs = {}, forecastDates = {};
   for (const [period, reference] of Object.entries(data.balanceRefs)) {
     if (!validPeriod(period) || !reference || !Number.isSafeInteger(reference.cents) || !validDate(reference.date)) throw new Error("Saldo de referência inválido.");
-    balanceRefs[period] = { cents: reference.cents, date: reference.date };
+    const sameDayIncludedIds = reference.sameDayIncludedIds ?? [], sameDayExcludedIds = reference.sameDayExcludedIds ?? [];
+    if (![sameDayIncludedIds, sameDayExcludedIds].every(ids => Array.isArray(ids) && ids.every(id => typeof id === "string")) || sameDayIncludedIds.some(id => sameDayExcludedIds.includes(id))) throw new Error("Movimentos de referência inválidos.");
+    balanceRefs[period] = { cents: reference.cents, date: reference.date, ...(reference.sameDayIncludedIds ? { sameDayIncludedIds } : {}), ...(reference.sameDayExcludedIds ? { sameDayExcludedIds } : {}) };
   }
   for (const [period, date] of Object.entries(data.forecastDates)) {
     if (!validPeriod(period) || !validDate(date) || (balanceRefs[period] && date < balanceRefs[period].date)) throw new Error("Data de previsão inválida.");
@@ -338,7 +344,13 @@ function validateState(data) {
   const salaryConfigured = data.salaryConfigured ?? Object.fromEntries(Object.keys(salaryMonths).map(period => [period, true]));
   if (!salaryConfigured || typeof salaryConfigured !== "object" || Array.isArray(salaryConfigured) || Object.entries(salaryConfigured).some(([period, saved]) => !validPeriod(period) || typeof saved !== "boolean")) throw new Error("Configuração salarial inválida.");
   if (!Number.isSafeInteger(nextSequence)) throw new Error("Limite de IDs sequenciais atingido.");
-  const result = { nextSequence, recurrences, salaryConfigured, version: 5, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments, settlements, invoiceFunding, salaryDefaults, salaryMonths, cardImage: data.cardImage, balanceRefs, forecastDates };
+  const invoiceDates = validateInvoiceDates(data.invoiceDates ?? {});
+  const paymentHistory = validatePaymentHistory(data.paymentHistory ?? {}, settlements);
+  for (const [period, entries] of Object.entries(paymentHistory)) {
+    const total = InvoiceMath.sum(entries.filter(item => item.active));
+    if (entries.some(item => item.active) !== (payments[period] === true) || (settlements[period] && settlements[period].cents !== total)) throw new Error("Histórico de pagamentos fora de sincronia.");
+  }
+  const result = { invoiceDates, paymentHistory, nextSequence, recurrences, salaryConfigured, version: 5, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments, settlements, invoiceFunding, salaryDefaults, salaryMonths, cardImage: data.cardImage, balanceRefs, forecastDates };
   for (const period of new Set([data.period, ...Object.keys(invoices), ...Object.keys(salaryMonths), ...Object.keys(settlements)])) financeFor(period, result);
   return result;
 }
@@ -419,6 +431,7 @@ let editingId = null;
 let editingPeriod = null;
 let receiptEditing = null;
 let settlementPeriod = null;
+let settlementEditingId = null;
 let currentView = "monthly";
 let editingBalancePeriod = null;
 let editingSalaryPeriod = null;
@@ -548,7 +561,7 @@ function renderRow(record) {
   return row;
 }
 function renderDue() {
-  const info = DueCalendar.calculate(state.period, state.dueDay);
+  const info = DueCalendar.calculate(state.period, state.dueDay, new Date(), invoiceDatesFor().due);
   $("due-date").textContent = displayDate(localDateString(info.due));
   const confirmed = state.payments[state.period] === true;
   const finance = financeFor();
@@ -558,9 +571,10 @@ function renderDue() {
   const status = partial ? "partial" : paid ? "paid" : info.status;
   $("due-message").textContent = message;
   $("due-message").dataset.status = status;
-  $("toggle-payment").textContent = partial ? "Desfazer pagamento" : paid ? "Marcar como não paga" : "Marcar como paga";
+  $("toggle-payment").textContent = partial ? "Quitar saldo restante" : paid ? "Marcar como não paga" : "Marcar como paga";
   $("toggle-payment").setAttribute("aria-pressed", String(confirmed));
-  $("correct-payment").hidden = !confirmed;
+  $("correct-payment").hidden = !confirmed || partial;
+  $("undo-partial-payment").hidden = !partial;
   $("invoice-summary-status").textContent = partial ? "Pagamento parcial" : paid ? "Paga" : "Em aberto";
   $("invoice-summary-status").dataset.status = partial ? "partial" : paid ? "paid" : "open";
   $("visual-card-period").textContent = periodLabel(state.period);
@@ -572,12 +586,15 @@ function renderManagement() {
   for (const type of ["categories", "labels"]) {
     const list = $(type === "categories" ? "category-list" : "label-list");
     list.replaceChildren();
-    if (!state[type].length) {
+    list.classList.toggle("scrollable-options", state[type].length > 8);
+    const query = compareName($(type === "categories" ? "category-search" : "label-search").value);
+    const options = state[type].filter(option => compareName(option.name).includes(query));
+    if (!options.length) {
       const empty = document.createElement("p");
-      empty.textContent = type === "categories" ? "Nenhuma categoria cadastrada." : "Nenhuma etiqueta cadastrada.";
+      empty.textContent = query ? "Nenhum resultado encontrado." : type === "categories" ? "Nenhuma categoria cadastrada." : "Nenhuma etiqueta cadastrada.";
       list.append(empty);
     }
-    for (const option of state[type]) {
+    for (const option of options) {
       const row = document.createElement("div");
       row.className = "option-row";
       const name = document.createElement("span");
@@ -608,7 +625,7 @@ function render() {
   const finance = financeFor();
   $("period-month").value = state.period.slice(5);
   $("period-year").value = Number(state.period.slice(0, 4));
-  $("due-day").value = state.dueDay;
+
   $("total").textContent = currency(totals.total);
   $("total-caption").textContent = periodLabel(state.period);
   refreshFinancialIndicators();
@@ -774,14 +791,16 @@ function deleteOption(type, id) {
 // Consulta temporária: a seleção não faz parte dos dados financeiros persistidos.
 function availableSumCategories() {
   const categories = [...state.categories];
-  if (creditRecords().some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
+  if (expenseRecords().some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
   return categories;
 }
 function renderCustomResult() {
   const categories = availableSumCategories();
   $("custom-period").textContent = periodLabel(state.period);
+  $("simulation-real-total").textContent = currency(financeFor().spending);
+  $("simulation-invoice-total").textContent = currency(financeFor().invoice);
   try {
-    $("custom-total").textContent = currency(InvoiceMath.selectedTotal(creditRecords(), customSelection));
+    $("custom-total").textContent = currency(InvoiceMath.selectedTotal(expenseRecords(), customSelection));
     $("custom-error").hidden = true;
   } catch (error) {
     $("custom-total").textContent = "—";
@@ -803,7 +822,7 @@ function renderCustomSum() {
   customAvailable = new Set([...customAvailable, ...available].filter(id => registered.has(id)));
   const focusedId = document.activeElement?.dataset.sumCategory;
   $("sum-options").replaceChildren();
-  const totals = InvoiceMath.calculate(creditRecords(), state.categories);
+  const totals = InvoiceMath.calculate(expenseRecords(), state.categories);
   for (const category of categories) {
     const label = document.createElement("label");
     label.className = "sum-option";
@@ -824,25 +843,34 @@ function renderCustomSum() {
   refreshExplanation();
 }
 $("toggle-payment").addEventListener("click", () => {
-  if (!state.payments[state.period]) { openSettlement(); return; }
+  if (!state.payments[state.period] || financeFor().invoiceRemaining > 0) { openSettlement(); return; }
+  undoInvoicePayments();
+});
+function undoInvoicePayments() {
   const period = state.period;
   confirmAction("Desfazer pagamento da fatura?", "O registro de saída de dinheiro será desfeito somente para este mês. As compras permanecem intactas.", "Marcar como não paga", () => {
     state.payments[period] = false;
     delete state.settlements[period];
+    for (const entry of state.paymentHistory[period] ?? []) entry.active = false;
     const saved = saveState();
     render();
     if (saved) notify("Pagamento desfeito para este mês.");
   });
-});
-$("sum-categories").addEventListener("click", () => {
-  customAvailable = new Set(availableSumCategories().map(category => category.id));
-  customSelection = new Set(customAvailable);
+}
+$("undo-partial-payment").addEventListener("click", undoInvoicePayments);
+function openSimulation() {
+  setView("monthly");
+  if ($("custom-panel").hidden) { customSelection = new Set(availableSumCategories().map(category => category.id)); customAvailable = new Set(customSelection); }
   $("custom-panel").hidden = false;
   $("sum-categories").setAttribute("aria-expanded", "true");
   renderCustomSum();
-  $("custom-panel").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
+  $("custom-panel").scrollIntoView({ block: "start", behavior: "smooth" });
   $("custom-title").focus({ preventScroll: true });
-});
+  setActiveNavigation("#custom-panel");
+}
+$("sum-categories").addEventListener("click", openSimulation);
+$("view-spending").addEventListener("click", openSimulation);
+$("nav-simulation").addEventListener("click", event => { event.preventDefault(); openSimulation(); });
 $("close-sum").addEventListener("click", () => {
   $("custom-panel").hidden = true;
   $("sum-categories").setAttribute("aria-expanded", "false");
@@ -894,7 +922,7 @@ $("record-form").addEventListener("submit", event => {
     if (["received", "paid"].includes(status) && cents === null) { invalidField = "value"; throw new Error("Um valor confirmado precisa ser preenchido."); }
     const paymentMethod = type === "expense" ? $("payment-method").value : null;
     const funding = type === "expense" && paymentMethod !== "credit" ? previousRecord?.funding ?? null : null;
-    const record = { id: editingId ?? newId(), createdOrder: previousRecord?.createdOrder ?? nextCreationOrder(state.invoices[editingPeriod] ?? []), description, categoryId, labelId, labelIds, sequenceId: previousRecord?.sequenceId, includeInBalance: previousRecord?.includeInBalance ?? true, recurrenceId: previousRecord?.recurrenceId ?? null, cents, type, date, status, paymentMethod, funding, salarySource: previousRecord?.salarySource ?? null };
+    const record = { id: editingId ?? newId(), createdOrder: previousRecord?.createdOrder ?? nextCreationOrder(state.invoices[editingPeriod] ?? []), description, categoryId, labelId, labelIds, sequenceId: previousRecord?.sequenceId, includeInBalance: previousRecord?.includeInBalance ?? true, sameDayAddition: type === "expense" && status === "paid" && previousRecord?.status !== "paid" ? true : previousRecord?.sameDayAddition ?? false, recurrenceId: previousRecord?.recurrenceId ?? null, cents, type, date, status, paymentMethod, funding, salarySource: previousRecord?.salarySource ?? null };
     const previous = state.invoices[editingPeriod] ?? [];
     const records = editingId ? previous.map(item => item.id === editingId ? record : item) : [...previous, record];
     const candidate = JSON.parse(JSON.stringify(state));
@@ -903,6 +931,7 @@ $("record-form").addEventListener("submit", event => {
       const choice = document.querySelector('input[name="record-impact"]:checked')?.value;
       if (!choice) throw new Error("Escolha se deseja incluir esta entrada nos cálculos do saldo.");
       record.includeInBalance = choice === "include";
+      record.sameDayAddition = choice === "include";
     }
     if (type === "income" && !record.salarySource) {
       let recurring = candidate.recurrences.find(item => item.id === record.recurrenceId);
@@ -978,27 +1007,7 @@ function changePeriod() {
 }
 $("period-month").addEventListener("change", changePeriod);
 $("period-year").addEventListener("change", changePeriod);
-$("due-form").addEventListener("submit", event => {
-  event.preventDefault();
-  const raw = $("due-day").value;
-  const day = Number(raw);
-  if (!/^\d{1,2}$/.test(raw) || !Number.isInteger(day) || day < 1 || day > 31) {
-    $("due-error").textContent = "Informe um dia entre 1 e 31.";
-    $("due-error").hidden = false;
-    $("due-day").setAttribute("aria-invalid", "true");
-    $("due-day").focus();
-    return;
-  }
-  $("due-error").hidden = true;
-  $("due-day").removeAttribute("aria-invalid");
-  state.dueDay = day;
-  const saved = saveState();
-  render();
-  if (saved) notify("Dia de vencimento atualizado para todos os meses.");
-});
-for (const [id, type, fromRecord] of [["create-category", "categories", true], ["create-label", "labels", true], ["manage-add-category", "categories", false], ["manage-add-label", "labels", false]]) {
-  $(id).addEventListener("click", () => openOption(type, null, fromRecord));
-}
+for (const [id, type, fromRecord] of [["create-category", "categories", true], ["create-label", "labels", true], ["manage-add-category", "categories", false], ["manage-add-label", "labels", false]]) $(id).addEventListener("click", () => openOption(type, null, fromRecord));
 for (const id of ["option-close", "option-cancel"]) $(id).addEventListener("click", () => $("option-dialog").close());
 $("option-form").addEventListener("submit", event => {
   event.preventDefault();
@@ -1048,6 +1057,7 @@ $("clear-data").addEventListener("click", () => confirmAction("Apagar os dados s
   state.invoices = {};
   state.payments = {};
   state.settlements = {};
+  state.paymentHistory = {};
   state.invoiceFunding = {};
   state.salaryMonths = {};
   state.balanceRefs = {};
@@ -1187,22 +1197,27 @@ function openReceipt(id) {
   $("receipt-context").textContent = `${FUNDINGS[id]} · ${periodLabel(state.period)}. Você pode confirmar um recebimento antecipado, sem mudar a data prevista.`;
   $("receipt-value").value = decimalInput(receipt.received ? receipt.actualCents : receipt.expectedCents);
   $("receipt-date").value = receipt.received ? receipt.actualDate : todayDate();
-  document.querySelectorAll('input[name="receipt-impact"]').forEach(input => { input.checked = false; });
-  $("receipt-previous-choice").hidden = !receipt.received;
+  document.querySelectorAll('input[name="receipt-impact"]').forEach(input => { input.checked = receipt.received && input.value === (receipt.includeInBalance === false ? "reference" : "include"); });
+  $("receipt-previous-choice").hidden = false;
   $("receipt-previous-choice").textContent = receipt.includeInBalance === false ? "Escolha atual: apenas marcar como recebida. Selecione a opção desejada para confirmar." : "Escolha atual: incluir no saldo. Selecione a opção desejada para confirmar.";
   $("receipt-error").hidden = true;
+  updateReceiptChoiceMessage();
   $("receipt-dialog").showModal();
   $("receipt-value").focus();
 }
 function openSettlement() {
   settlementPeriod = state.period;
-  const existing = state.settlements[state.period];
-  $("settlement-context").textContent = `${periodLabel(state.period)} · Fatura atual ${currency(financeFor().invoice)}. Este pagamento sai do saldo sem gerar uma segunda despesa.`;
-  $("settlement-value").value = decimalInput(existing?.cents ?? financeFor().invoice);
-  $("settlement-date").value = existing?.date ?? todayDate();
+  const finance = financeFor();
+  const entries = state.paymentHistory[state.period] ?? [];
+  settlementEditingId = finance.invoiceRemaining <= 0 ? entries.filter(item => item.active).at(-1)?.id ?? null : null;
+  const entry = entries.find(item => item.id === settlementEditingId);
+  $("settlement-amount-label").textContent = entry ? "Valor deste pagamento (R$)" : "Valor a quitar (R$)";
+  $("settlement-context").textContent = entry ? "Correção somente da data deste pagamento. Seu valor e os demais pagamentos são preservados." : `Fatura ${currency(finance.invoice)} · Já pago ${currency(finance.invoicePaid)} · Quitar saldo restante. Não gera outra despesa.`;
+  $("settlement-value").value = decimalInput(entry?.cents ?? Math.max(finance.invoiceRemaining, 0));
+  $("settlement-date").value = entry?.date ?? todayDate();
   $("settlement-error").hidden = true;
   $("settlement-dialog").showModal();
-  $("settlement-value").focus();
+  $("settlement-date").focus();
 }
 for (const view of ["monthly", "salary"]) {
   $("tab-" + view).addEventListener("click", () => setView(view));
@@ -1271,7 +1286,7 @@ $("receipt-form").addEventListener("submit", event => {
     const { id, period } = receiptEditing;
     const candidate = JSON.parse(JSON.stringify(state));
     const salary = salaryFor(period);
-    candidate.salaryMonths[period] = { ...salary, [id]: { ...salary[id], received: true, actualCents: value, actualDate: date, includeInBalance: choice === "include" } };
+    candidate.salaryMonths[period] = { ...salary, [id]: { ...salary[id], received: true, actualCents: value, actualDate: date, includeInBalance: choice === "include", balanceChoiceExplicit: true } };
     syncSalaryRecords(candidate);
     state = validateState(candidate);
     const saved = saveState();
@@ -1286,13 +1301,19 @@ $("receipt-form").addEventListener("submit", event => {
 $("settlement-form").addEventListener("submit", event => {
   event.preventDefault();
   try {
-    const cents = InvoiceMath.parseMoney($("settlement-value").value);
+    const entries = state.paymentHistory[settlementPeriod] ?? [];
+    const previousEntry = entries.find(item => item.id === settlementEditingId && item.active);
+    const cents = previousEntry?.cents ?? Math.max(financeFor(settlementPeriod).invoiceRemaining, 0);
     if (cents === null) throw new Error("Preencha o valor pago.");
     const date = $("settlement-date").value;
     if (!validDate(date)) throw new Error("Informe uma data válida para o pagamento.");
     const candidate = JSON.parse(JSON.stringify(state));
     candidate.payments[settlementPeriod] = true;
-    candidate.settlements[settlementPeriod] = { cents, date };
+    candidate.paymentHistory[settlementPeriod] ??= [];
+    if (previousEntry) candidate.paymentHistory[settlementPeriod].find(item => item.id === previousEntry.id).date = date;
+    else candidate.paymentHistory[settlementPeriod].push({ id: newId(), cents, date, active: true, sameDayAddition: true });
+    const active = candidate.paymentHistory[settlementPeriod].filter(item => item.active);
+    candidate.settlements[settlementPeriod] = { cents: InvoiceMath.sum(active), date: active.at(-1).date };
     state = validateState(candidate);
     const saved = saveState();
     $("settlement-dialog").close();
@@ -1373,11 +1394,15 @@ function renderBalanceControls() {
   $("reference-summary-date").textContent = `Referência: ${displayDate(reference.date)}`;
   $("bank-balance").value = decimalInput(reference.cents);
   $("balance-date").value = reference.date;
+  renderReferenceMovements();
   $("forecast-date").value = forecastFor();
   $("forecast-date").min = reference.date;
-  $("forecast-caption").textContent = `Para ${displayDate(forecastFor())}`;
+  const finance = financeFor();
+  const hasForecast = finance.parts.projected.some(item => ["Entrada prevista", "Saída pendente"].includes(item.movement));
+  $("forecast-caption").textContent = `Até ${displayDate(forecastFor())}${hasForecast ? " · disponível + entradas previstas − saídas pendentes." : ". Sem movimentações previstas: igual ao saldo disponível."}`;
+  renderInvoiceDateControls();
   $("forecast-period-note").textContent = `Somente movimentos de ${periodLabel(state.period)}.`;
-  $("balance-reference-note").textContent = `${state.balanceRefs[state.period] ? "Referência salva para este período." : "Saldo ainda não informado: usando zero como ponto de partida."} O saldo inclui movimentos realizados até o final da data informada. Movimentos posteriores são considerados uma vez.`;
+  $("balance-reference-note").textContent = `${state.balanceRefs[state.period] ? "Referência salva para este período." : "Saldo ainda não informado: usando zero como ponto de partida."} Movimentos anteriores já estão no saldo. Os do mesmo dia respeitam sua escolha de inclusão ou a lista de revisão; movimentos posteriores são considerados uma vez.`;
 }
 $("edit-balance").addEventListener("click", () => {
   editingBalancePeriod = state.period;
@@ -1394,7 +1419,8 @@ $("balance-form").addEventListener("submit", event => {
     if (!validDate(date)) throw new Error("Informe uma data de referência válida.");
     if (date > todayDate()) throw new Error("O saldo atual deve ter referência em hoje ou em uma data anterior.");
     const candidate = JSON.parse(JSON.stringify(state));
-    candidate.balanceRefs[state.period] = { cents, date };
+    const controls = [...$("reference-movement-options").querySelectorAll("input[data-movement]")];
+    candidate.balanceRefs[state.period] = { cents, date, sameDayIncludedIds: controls.filter(input => input.checked).map(input => input.dataset.movement), sameDayExcludedIds: controls.filter(input => !input.checked).map(input => input.dataset.movement) };
     if (candidate.forecastDates[state.period] && candidate.forecastDates[state.period] < date) candidate.forecastDates[state.period] = date;
     state = validateState(candidate);
     $("balance-error").hidden = true;
@@ -1460,15 +1486,15 @@ function explanationData(key) {
   };
   if (key === "available" || key === "projected") {
     basic.items = finance.parts[key === "available" ? "availableDetails" : "projectedDetails"];
-    basic.formula = key === "available" ? `Referência + entradas recebidas − saídas pagas, posteriores a ${displayDate(finance.reference.date)} e até ${displayDate(finance.today)}.` : `Saldo disponível agora + entradas previstas − saídas pendentes até ${displayDate(finance.target)}. Itens com impacto zero ficam visíveis para explicar as exclusões.`;
-    basic.note += ` ${finance.alreadyIncluded.length} movimento(s) já considerados no saldo de referência estão incluídos nele e não são somados de novo. A referência considera o fim do dia. Recebimentos marcados como já considerados nela também ficam fora dos saldos, independentemente da data real.`;
+    basic.formula = key === "available" ? `Referência de ${displayDate(finance.reference.date)} + entradas recebidas ainda não consideradas − pagamentos ainda não considerados, até ${displayDate(finance.today)}. Os itens no mesmo dia usam a inclusão explícita ou a revisão do saldo.` : `Saldo disponível agora + entradas previstas − saídas pendentes até ${displayDate(finance.target)}. Itens com impacto zero ficam visíveis para explicar as exclusões.`;
+    basic.note += ` ${finance.alreadyIncluded.length} movimento(s) já considerados no saldo de referência estão incluídos nele e não são somados de novo. Movimentos na mesma data usam a inclusão explícita ou a lista revisada no saldo de referência. Recebimentos marcados como já considerados nela também ficam fora dos saldos, independentemente da data real.`;
     if (finance.undated.length) basic.note += ` ${finance.undated.length} movimento(s) sem data ficam fora dos saldos. Preencha as datas para incluí-los com segurança.`;
     if (!state.balanceRefs[state.period]) basic.note += " Saldo bancário ainda não informado: referência inicial zero.";
   } else if (key === "custom") {
-    const totals = InvoiceMath.calculate(creditRecords(), state.categories);
+    const totals = InvoiceMath.calculate(expenseRecords(), state.categories);
     basic.items = availableSumCategories().filter(category => customSelection.has(category.id)).map(category => ({ label: category.name, cents: totals.groups[category.id], date: null }));
-    basic.amount = InvoiceMath.selectedTotal(creditRecords(), customSelection);
-    basic.formula = "Soma dos subtotais das categorias marcadas, apenas nas compras no cartão. Não altera a fatura.";
+    basic.amount = InvoiceMath.selectedTotal(expenseRecords(), customSelection);
+    basic.formula = "Soma dos subtotais das categorias marcadas, nas despesas do mês. Não altera os gastos reais nem a fatura.";
   } else if (key === "salaryExpected" || key === "salaryDifference") {
     const salary = salaryFor();
     basic.items = ["first", "second"].map(id => ({ label: `${FUNDINGS[id]} · prevista`, cents: key === "salaryDifference" ? -salary[id].expectedCents : salary[id].expectedCents, date: receiptDate(state.period, salary[id]) }));
@@ -1481,7 +1507,7 @@ function explanationData(key) {
     basic.title = `${FUNDINGS[source]} · recebida`;
     basic.items = receipt.received ? [{ label: `${FUNDINGS[source]} · entrada vinculada`, cents: receipt.actualCents, date: receipt.actualDate }] : [];
     basic.amount = receipt.received ? receipt.actualCents : 0;
-    basic.formula = `Valor efetivamente recebido. A mesma entrada aparece na tabela e é contada uma vez. ${receipt.includeInBalance === false ? "Já considerado no saldo de referência: preserva o histórico de entradas e não soma aos saldos." : "Participa dos saldos somente após a data de referência."}`;
+    basic.formula = `Valor efetivamente recebido. A mesma entrada aparece na tabela e é contada uma vez. ${receipt.includeInBalance === false ? "Já considerado no saldo de referência: preserva o histórico de entradas e não soma aos saldos." : "Participa dos saldos quando ainda não considerado, inclusive no mesmo dia da referência conforme a escolha salva."}`;
   } else basic.formula = formulas[key] ?? "Soma dos itens indicados.";
   return basic;
 }
@@ -1672,6 +1698,80 @@ $("category-tabs").addEventListener("pointerout", () => { $("category-popover").
 $("category-tabs").addEventListener("focusin", event => { const button = event.target.closest("button[data-category]"); if (button) categorySummary(button); });
 $("category-tabs").addEventListener("focusout", () => { $("category-popover").hidden = true; });
 window.addEventListener("scroll", () => { $("category-popover").hidden = true; }, true);
+
+function parseLocalDate(value) { const [year, month, day] = value.split("-").map(Number); return DueCalendar.date(year, month - 1, day); }
+function invoiceDatesFor(period = state.period, data = state) {
+  if (data.invoiceDates?.[period]) return data.invoiceDates[period];
+  const [year, month] = period.split("-").map(Number);
+  const dueDate = DueCalendar.date(year, month - 1, data.dueDay ?? 5);
+  const closeDate = new Date(dueDate); closeDate.setDate(closeDate.getDate() - 7);
+  return { due: localDateString(dueDate), closing: localDateString(closeDate) };
+}
+function validateInvoiceDates(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Datas da fatura inválidas.");
+  const result = {};
+  for (const [period, dates] of Object.entries(data)) {
+    if (!validPeriod(period) || !dates || !validDate(dates.closing) || !validDate(dates.due) || dates.closing >= dates.due) throw new Error("O fechamento deve ser uma data válida anterior ao vencimento.");
+    result[period] = { closing: dates.closing, due: dates.due };
+  }
+  return result;
+}
+function validatePaymentHistory(data, settlements) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Histórico de pagamentos inválido.");
+  const result = {}; const ids = new Set();
+  for (const [period, entries] of Object.entries(data)) {
+    if (!validPeriod(period) || !Array.isArray(entries)) throw new Error("Histórico de pagamentos inválido.");
+    result[period] = entries.map(entry => {
+      if (!entry || typeof entry.id !== "string" || !entry.id || ids.has(entry.id) || !Number.isSafeInteger(entry.cents) || entry.cents < 0 || typeof entry.active !== "boolean" || (entry.date !== null && !validDate(entry.date)) || (entry.sameDayAddition !== undefined && typeof entry.sameDayAddition !== "boolean")) throw new Error("Pagamento histórico inválido.");
+      ids.add(entry.id); return { id: entry.id, cents: entry.cents, date: entry.date, active: entry.active, sameDayAddition: entry.sameDayAddition ?? false };
+    });
+  }
+  for (const [period, entry] of Object.entries(settlements)) if (!Object.hasOwn(result, period)) result[period] = [{ id: `payment-legacy-${period}`, cents: entry.cents, date: entry.date, active: true, sameDayAddition: false }];
+  return result;
+}
+const expenseRecords = () => currentRecords().filter(record => record.type === "expense");
+function renderInvoiceDateControls() {
+  const dates = invoiceDatesFor();
+  const locked = state.payments[state.period] === true;
+  $("invoice-closing-date").value = dates.closing; $("invoice-due-date").value = dates.due;
+  for (const id of ["invoice-closing-date", "invoice-due-date", "save-invoice-dates"]) $(id).disabled = locked;
+  $("invoice-dates-caption").textContent = `Fechamento${state.invoiceDates[state.period] ? "" : " (sugerido)"}: ${displayDate(dates.closing)} · Vencimento: ${displayDate(dates.due)}`;
+  $("invoice-dates-note").textContent = locked ? `${state.invoiceDates[state.period] ? "Datas salvas preservadas." : "Vencimento preservado. O fechamento é uma sugestão, pois não havia data registrada."} Nenhuma compra será transferida entre faturas enquanto há pagamento confirmado.` : `${state.invoiceDates[state.period] ? "Datas salvas." : "Sugestão editável: fechamento sete dias antes do vencimento."} As compras pertencem ao mês cadastrado; alterar estas datas não transfere lançamentos. O vencimento altera a previsão do pagamento da fatura.`;
+}
+$("invoice-dates-form").addEventListener("submit", event => {
+  event.preventDefault();
+  try {
+    if (state.payments[state.period]) throw new Error("As datas de uma fatura com pagamento confirmado estão preservadas.");
+    const dates = { closing: $("invoice-closing-date").value, due: $("invoice-due-date").value };
+    validateInvoiceDates({ [state.period]: dates });
+    const candidate = JSON.parse(JSON.stringify(state)); candidate.invoiceDates[state.period] = dates;
+    state = validateState(candidate); $("invoice-dates-error").hidden = true;
+    const saved = saveState(); render();
+    if (saved) notify("Datas salvas. A previsão usa o novo vencimento; as compras permanecem no período cadastrado.");
+  } catch (error) { $("invoice-dates-error").textContent = error.message; $("invoice-dates-error").hidden = false; }
+});
+function updateReceiptChoiceMessage() {
+  const choice = document.querySelector('input[name="receipt-impact"]:checked')?.value;
+  $("receipt-previous-choice").textContent = choice === "include" ? "Incluir no saldo: este recebimento movimenta o saldo, inclusive no mesmo dia da referência se ainda não estiver contabilizado." : choice === "reference" ? "Apenas marcar como recebida: já considerada no saldo de referência — não soma novamente." : "Escolha o impacto deste recebimento no saldo.";
+}
+document.querySelectorAll('input[name="receipt-impact"]').forEach(input => input.addEventListener("change", updateReceiptChoiceMessage));
+function renderReferenceMovements() {
+  const reference = balanceFor(); const date = $("balance-date").value;
+  const finance = financeFor();
+  const items = [...finance.parts.incomeReceived, ...finance.parts.expensePaid].filter(item => item.date === date);
+  $("reference-movement-options").replaceChildren();
+  if (!items.length) $("reference-movement-options").textContent = "Não há movimentos confirmados nessa data. Novos recebimentos usam sua escolha de inclusão; novos pagamentos serão descontados uma vez.";
+  for (const item of items) {
+    const label = document.createElement("label"); label.className = "reference-movement";
+    const input = document.createElement("input"); input.type = "checkbox"; input.dataset.movement = item.movementId;
+    input.checked = date !== reference.date || (reference.sameDayIncludedIds ?? []).includes(item.movementId) || (!(reference.sameDayExcludedIds ?? []).includes(item.movementId) && !item.sameDayAddition);
+    if (item.inReference) { input.checked = true; input.disabled = true; input.title = "Inclusão controlada pela opção Apenas marcar como recebida. Corrija o recebimento para alterá-la."; }
+    label.append(input, document.createTextNode(`${item.label} · ${currency(item.cents)} · já incluído no saldo informado`)); $("reference-movement-options").append(label);
+  }
+}
+$("balance-date").addEventListener("change", renderReferenceMovements);
+for (const id of ["category-search", "label-search"]) $(id).addEventListener("input", renderManagement);
+document.querySelector('.nav-link[href="#sem-duplicidade"]').addEventListener("click", () => { setView("monthly"); setActiveNavigation("#sem-duplicidade"); });
 
 render();
 if (!storageBlocked) {

@@ -52,13 +52,14 @@ with sync_playwright() as playwright:
         name='Primeira quinzena' if source=='first' else 'Segunda quinzena'
         action='Corrigir recebimento' if correction else 'Marcar como recebida'
         page.get_by_role('button',name=f'{action}: {name}',exact=True).click()
-        assert page.locator('input[name="receipt-impact"]:checked').count()==0
+        assert page.locator('input[name="receipt-impact"]:checked').count()==(1 if correction else 0)
         assert page.locator('#receipt-dialog').get_by_text('Deseja incluir este recebimento nos cálculos do saldo?',exact=True).is_visible()
         page.locator('#receipt-value').fill(value)
         page.locator('#receipt-date').fill(date)
-        page.locator('#receipt-form').evaluate('(form) => form.requestSubmit()')
-        assert page.locator('#receipt-dialog').is_visible()
-        assert 'Escolha' in page.locator('#receipt-error').inner_text()
+        if not correction:
+            page.locator('#receipt-form').evaluate('(form) => form.requestSubmit()')
+            assert page.locator('#receipt-dialog').is_visible()
+            assert 'Escolha' in page.locator('#receipt-error').inner_text()
         page.locator(f'input[name="receipt-impact"][value="{choice}"]').check()
         page.locator('#receipt-form').evaluate('(form) => form.requestSubmit()')
         assert not page.locator('#receipt-dialog').is_visible()

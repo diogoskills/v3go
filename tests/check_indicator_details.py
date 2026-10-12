@@ -64,7 +64,7 @@ with sync_playwright() as pw:
     page.locator('#forecast-date').fill('2026-10-25');page.locator('#forecast-date').dispatch_event('change')
     assert page.evaluate('financeFor().projected')==163640  # A future dated confirmed entry is not received now.
     add('Compra no cartão','expense','250,00','2026-10-11',method='credit')
-    page.locator('#toggle-payment').click();page.locator('#settlement-value').fill('250,00');page.locator('#settlement-date').fill('2026-10-12');page.locator('#settlement-form').evaluate('f=>f.requestSubmit()')
+    page.locator('#toggle-payment').click();assert page.locator('#settlement-value').input_value()=='250,00';page.locator('#settlement-date').fill('2026-10-12');page.locator('#settlement-form').evaluate('f=>f.requestSubmit()')
     assert page.locator('#invoice-summary-status').inner_text()=='Paga'
     assert page.locator('#invoice-summary-status').get_attribute('data-status')=='paid'
     assert page.locator('#total').inner_text()=='R$\xa0250,00'

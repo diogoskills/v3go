@@ -50,7 +50,8 @@ def add(page, description, value, kind="expense", method="credit", status="pendi
     page.locator("#record-status").select_option(status)
     page.locator("#group").select_option(category)
     if kind == "income" and status == "received":
-        page.locator('input[name="record-impact"][value="include"]').check()
+        impact = "reference" if description == "Mesmo dia da referência" else "include"
+        page.locator(f'input[name="record-impact"][value="{impact}"]').check()
     page.get_by_role("button", name="Salvar lançamento", exact=True).click()
     assert not page.locator("#record-dialog").is_visible(), page.locator("#form-error").inner_text()
 
@@ -74,7 +75,7 @@ def pay(page, value, date="2026-10-05", edit=False):
     else:
         view(page)
         page.locator("#toggle-payment").click()
-    page.locator("#settlement-value").fill(value)
+    assert page.locator("#settlement-value").is_editable() is False
     page.locator("#settlement-date").fill(date)
     page.get_by_role("button", name="Confirmar pagamento", exact=True).click()
     assert not page.locator("#settlement-dialog").is_visible()
@@ -156,10 +157,10 @@ with sync_playwright() as playwright:
     assert {key: f[key] for key in expected} == expected, f
     assert page.locator("#records tr").count() == 7  # One linked salary entry; confirmation is not counted a second time.
     page.locator("#sum-categories").click()
-    assert page.evaluate("InvoiceMath.selectedTotal(creditRecords(),customSelection)") == 45000
+    assert page.evaluate("InvoiceMath.selectedTotal(expenseRecords(),customSelection)") == 52000
     page.locator("#sum-none").click()
     page.locator('[data-sum-category="fixed"]').check()
-    assert page.evaluate("InvoiceMath.selectedTotal(creditRecords(),customSelection)") == 30000
+    assert page.evaluate("InvoiceMath.selectedTotal(expenseRecords(),customSelection)") == 37000
     assert finance(page)["spending"] == 52000
     pay(page, "450,00")
     f = finance(page)
@@ -182,20 +183,15 @@ with sync_playwright() as playwright:
     assert finance(page)["expensePending"] == 5000
     print("PASS: independent receipt correction, simplified salary panel and no allocation controls")
 
-    pay(page, "200,00", edit=True)
-    f = finance(page)
-    assert f["expensePaid"] == 22000 and f["expensePending"] == 30000
-    assert f["available"] == 148000 and f["projected"] == 138000
-    assert f["spending"] == 52000
-    assert page.locator("#due-message").inner_text() == "Pagamento parcial"
-    pay(page, "450,00", edit=True)
+    pay(page, "450,00", edit=True)  # Correct the date; the paid value remains locked.
+    assert finance(page)["invoicePaid"] == 45000
     add(page, "Nova compra após pagamento", "10,00", category="shopping")
     assert finance(page)["invoice"] == 46000
     assert finance(page)["invoicePaid"] == 45000
     assert finance(page)["invoiceRemaining"] == 1000
     assert finance(page)["available"] == 123000 and finance(page)["projected"] == 137000
     assert page.locator("#due-message").inner_text() == "Pagamento parcial"
-    pay(page, "460,00", edit=True)
+    pay(page, "10,00")
     assert finance(page)["expensePaid"] == 48000 and finance(page)["available"] == 122000
     assert finance(page)["spending"] == 53000
     page.locator("#toggle-payment").click()
@@ -206,7 +202,7 @@ with sync_playwright() as playwright:
     page.reload()
     assert finance(page)["available"] == 122000
     assert page.locator("#due-message").inner_text() == "Fatura paga"
-    print("PASS: paid value snapshot, partial payment/residual, correction/undo, new purchases do not silently rewrite paid cash")
+    print("PASS: paid value locked, residual settlement preserves history, date correction/undo, new purchases do not silently rewrite paid cash")
 
     old_salary = page.evaluate("salaryFor()")
     period(page, 11)
@@ -287,8 +283,8 @@ with sync_playwright() as playwright:
     page.locator("#sum-categories").click()
     page.locator("#sum-none").click()
     page.locator('[data-sum-category="uncategorized"]').check()
-    assert page.evaluate("InvoiceMath.selectedTotal(creditRecords(),customSelection)") == 10
-    print("PASS: transaction type filters, inline category, rename/unassignment, personalized query only credit purchases")
+    assert page.evaluate("InvoiceMath.selectedTotal(expenseRecords(),customSelection)") == 10
+    print("PASS: transaction type filters, inline category, rename/unassignment, personalized expense query preserves real invoice")
 
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -420,7 +416,7 @@ with sync_playwright() as playwright:
     assert sample.evaluate("currentRecords().filter(x=>x.salarySource==='second').length") == 1
     sample.reload()
     assert finance(sample)["available"] == 179000
-    assert finance(sample)["reference"] == {"cents":100000,"date":"2026-10-12"}
+    assert {key:finance(sample)["reference"][key] for key in ["cents","date"]} == {"cents":100000,"date":"2026-10-12"}
     assert finance(sample)["target"] == "2026-10-15"
     period(sample,11)
     assert not sample.evaluate("Object.hasOwn(state.balanceRefs,state.period)")

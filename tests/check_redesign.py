@@ -112,7 +112,7 @@ with sync_playwright() as playwright:
     boxes = page.locator('.quarter-column').evaluate_all('cards => cards.map(c => ({x:c.getBoundingClientRect().x,y:c.getBoundingClientRect().y}))')
     assert boxes[0]['x'] == boxes[1]['x'] and boxes[0]['y'] < boxes[1]['y']
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    assert page.locator('.nav-link:visible').count() == 4
+    assert page.locator('.nav-link:visible').count() == 6
     page.get_by_role('button', name='Marcar como recebida: Primeira quinzena', exact=True).tap()
     assert page.locator('#receipt-dialog').is_visible()
     page.locator('#receipt-dialog').evaluate('(dialog) => dialog.close()')
