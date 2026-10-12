@@ -66,7 +66,7 @@ const normalizeName = name => name.trim().replace(/\s+/g, " ");
 const compareName = name => normalizeName(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
 const validPeriod = period => typeof period === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(period) && Number(period.slice(0, 4)) >= 1;
 const newId = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const emptyState = () => ({ version: 5, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {}, settlements: {}, invoiceFunding: {}, salaryDefaults: JSON.parse(JSON.stringify(DEFAULT_SALARY)), salaryMonths: {}, cardImage: null, balanceRefs: {}, forecastDates: {} });
+const emptyState = () => ({ version: 5, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {}, settlements: {}, invoiceFunding: {}, salaryDefaults: JSON.parse(JSON.stringify(DEFAULT_SALARY)), salaryMonths: {}, cardImage: null, balanceRefs: {}, forecastDates: {}, nextSequence: 1, recurrences: [], salaryConfigured: {} });
 
 // Datas locais: diferenças de dias civis evitam erros de horário de verão.
 const DueCalendar = Object.freeze({
@@ -112,7 +112,7 @@ function validateOptions(options, type) {
     return type === "categories" ? { id: option.id, name: normalizeName(option.name), color: option.color } : { id: option.id, name: normalizeName(option.name) };
   });
 }
-const DEFAULT_SALARY = { grossCents: 177200, first: { cents: 86600, day: 5 }, second: { cents: 75000, day: 15 } };
+const DEFAULT_SALARY = { grossCents: 177200, first: { cents: 86600, day: 5 }, second: { cents: 75084, day: 15 } };
 const METHODS = { credit: "Cartão de crédito", pix: "Pix", debit: "Débito", cash: "Dinheiro", transfer: "Transferência", other: "Outro" };
 const FUNDINGS = { first: "Primeira quinzena", second: "Segunda quinzena", balance: "Saldo disponível" };
 const validDate = value => {
@@ -151,7 +151,7 @@ function syncSalaryRecords(data) {
       if (receipt?.received) {
         const prefix = `salary-${period}-${source}`;
         const id = existing?.id ?? (records.some(record => record.id === prefix) ? newId() : prefix);
-        records.push({ id, createdOrder: existing?.createdOrder ?? nextCreationOrder(records), description: existing?.description ?? `Salário · ${FUNDINGS[source]}`, categoryId: existing?.categoryId ?? null, labelId: existing?.labelId ?? null, cents: receipt.actualCents, type: "income", date: receipt.actualDate, status: "received", paymentMethod: null, funding: null, salarySource: source });
+        records.push({ ...existing, id, labelIds: existing?.labelIds ?? (existing?.labelId ? [existing.labelId] : []), createdOrder: existing?.createdOrder ?? nextCreationOrder(records), description: existing?.description ?? `Salário · ${FUNDINGS[source]}`, categoryId: existing?.categoryId ?? null, labelId: existing?.labelId ?? null, cents: receipt.actualCents, type: "income", date: receipt.actualDate, status: "received", paymentMethod: null, funding: null, salarySource: source });
       }
     }
     if (records.length || Object.hasOwn(data.invoices, period)) data.invoices[period] = records;
@@ -192,7 +192,7 @@ const FinanceMath = Object.freeze({
     const invoiceDate = localDateString(DueCalendar.calculate(period, options.dueDay ?? 5).due);
     const parts = {
       invoice: credit.map(financialItem),
-      incomeReceived: incomes.filter(record => record.status === "received").map(record => ({ ...financialItem(record), inReference: record.salarySource !== null && salary[record.salarySource]?.includeInBalance === false })),
+      incomeReceived: incomes.filter(record => record.status === "received").map(record => ({ ...financialItem(record), inReference: record.includeInBalance === false || (record.salarySource !== null && salary[record.salarySource]?.includeInBalance === false) })),
       incomeExpected: [...incomes.filter(record => record.status === "expected").map(financialItem), ...expectedSalary],
       expensePaid: [...direct.filter(record => record.status === "paid").map(financialItem), ...(settlement ? [{ label: "Pagamento da fatura", cents: invoicePaid, date: settlement.date }] : [])],
       expensePending: [...direct.filter(record => record.status === "pending").map(financialItem), ...(invoiceRemaining !== 0 ? [{ label: "Fatura ainda a pagar", cents: invoiceRemaining, date: invoiceDate }] : [])],
@@ -217,6 +217,7 @@ function financeFor(period = state.period, data = state) {
 }
 
 function validateSalaryDefaults(data) {
+  if (data && data.second?.cents == null) data = { ...data, second: { cents: DEFAULT_SALARY.second.cents, day: data.second?.day ?? 15 } };
   if (!data || !Number.isSafeInteger(data.grossCents) || data.grossCents < 0) throw new Error("Salário bruto inválido.");
   const result = { grossCents: data.grossCents };
   for (const id of ["first", "second"]) {
@@ -228,6 +229,7 @@ function validateSalaryDefaults(data) {
   return result;
 }
 function validateSalaryMonth(data) {
+  if (data && data.second?.expectedCents == null) data = { ...data, second: { received: false, actualCents: null, actualDate: null, ...data.second, expectedCents: DEFAULT_SALARY.second.cents, day: data.second?.day ?? 15 } };
   if (!data || !Number.isSafeInteger(data.grossCents) || data.grossCents < 0) throw new Error("Salário do mês inválido.");
   const result = { grossCents: data.grossCents };
   for (const id of ["first", "second"]) {
@@ -247,21 +249,32 @@ function validateState(data) {
   const categories = validateOptions(data.categories, "categories");
   const labels = validateOptions(data.labels, "labels");
   const invoices = {};
+  if (data.nextSequence !== undefined && (!Number.isSafeInteger(data.nextSequence) || data.nextSequence < 1)) throw new Error("Contador de IDs inválido.");
+  let nextSequence = Number.isSafeInteger(data.nextSequence) && data.nextSequence > 0 ? data.nextSequence : 1;
+  const sequences = new Set();
+  for (const record of Object.values(data.invoices).flat()) if (record.sequenceId !== undefined) {
+    if (!Number.isSafeInteger(record.sequenceId) || record.sequenceId < 1 || sequences.has(record.sequenceId)) throw new Error("ID sequencial inválido ou duplicado.");
+    sequences.add(record.sequenceId);
+    nextSequence = Math.max(nextSequence, record.sequenceId + 1);
+  }
   for (const [period, records] of Object.entries(data.invoices)) {
     if (!validPeriod(period) || !Array.isArray(records)) throw new Error("Período inválido.");
     const ids = new Set();
     invoices[period] = records.map((record, index) => {
       const income = record?.type === "income";
+      const labelIds = record?.labelIds ?? (record?.labelId ? [record.labelId] : []);
+      if (!Array.isArray(labelIds) || new Set(labelIds).size !== labelIds.length || labelIds.some(id => !labels.some(label => label.id === id))) throw new Error("Etiquetas inválidas.");
+      if (record.includeInBalance !== undefined && typeof record.includeInBalance !== "boolean") throw new Error("Impacto no saldo inválido.");
       if (!record || typeof record.id !== "string" || !record.id || ids.has(record.id) ||
           typeof record.description !== "string" || !record.description.trim() || record.description.length > 200 ||
           (record.categoryId !== null && !categories.some(category => category.id === record.categoryId)) ||
-          (record.labelId !== null && !labels.some(label => label.id === record.labelId)) ||
+
           (record.cents !== null && !Number.isSafeInteger(record.cents)) || !["income", "expense"].includes(record.type) ||
           (record.date !== null && !validDate(record.date)) || !(income ? ["expected", "received"] : ["pending", "paid"]).includes(record.status) ||
           (income ? record.paymentMethod !== null : !Object.hasOwn(METHODS, record.paymentMethod)) ||
           (record.funding !== null && !Object.hasOwn(FUNDINGS, record.funding)) || (income && record.funding !== null) || ![null, "first", "second"].includes(record.salarySource)) throw new Error("Lançamento inválido.");
       ids.add(record.id);
-      return { id: record.id, createdOrder: Number.isSafeInteger(record.createdOrder) && record.createdOrder >= 0 ? record.createdOrder : index, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding, salarySource: record.salarySource };
+      return { sequenceId: record.sequenceId ?? nextSequence++, labelIds, labelId: labelIds[0] ?? null, includeInBalance: record.includeInBalance ?? true, recurrenceId: record.recurrenceId ?? null, id: record.id, createdOrder: Number.isSafeInteger(record.createdOrder) && record.createdOrder >= 0 ? record.createdOrder : index, description: record.description, categoryId: record.categoryId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding, salarySource: record.salarySource };
     });
     InvoiceMath.calculate(creditRecords(invoices[period]), categories);
   }
@@ -304,7 +317,12 @@ function validateState(data) {
       } else if (linked.length) throw new Error("Entrada de quinzena sem confirmação.");
     }
   }
-  const result = { version: 5, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments, settlements, invoiceFunding, salaryDefaults, salaryMonths, cardImage: data.cardImage, balanceRefs, forecastDates };
+  const recurrences = validateRecurrences(data.recurrences ?? [], categories, labels);
+  for (const records of Object.values(invoices)) for (const record of records) if (record.recurrenceId !== null && (!recurrences.some(item => item.id === record.recurrenceId) || record.type !== "income" || record.salarySource)) throw new Error("Entrada recorrente inválida.");
+  const salaryConfigured = data.salaryConfigured ?? Object.fromEntries(Object.keys(salaryMonths).map(period => [period, true]));
+  if (!salaryConfigured || typeof salaryConfigured !== "object" || Array.isArray(salaryConfigured) || Object.entries(salaryConfigured).some(([period, saved]) => !validPeriod(period) || typeof saved !== "boolean")) throw new Error("Configuração salarial inválida.");
+  if (!Number.isSafeInteger(nextSequence)) throw new Error("Limite de IDs sequenciais atingido.");
+  const result = { nextSequence, recurrences, salaryConfigured, version: 5, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments, settlements, invoiceFunding, salaryDefaults, salaryMonths, cardImage: data.cardImage, balanceRefs, forecastDates };
   for (const period of new Set([data.period, ...Object.keys(invoices), ...Object.keys(salaryMonths), ...Object.keys(settlements)])) financeFor(period, result);
   return result;
 }
@@ -387,6 +405,7 @@ let receiptEditing = null;
 let settlementPeriod = null;
 let currentView = "monthly";
 let editingBalancePeriod = null;
+let editingSalaryPeriod = null;
 let recordSort = { key: "date", direction: "descending" };
 let optionEditor = null;
 let confirmationAction = null;
@@ -438,9 +457,16 @@ function selectOptions(element, options, emptyLabel, selected = "", includeAll =
   options.forEach(option => add(option.id, option.name));
   element.value = [...element.options].some(option => option.value === selected) ? selected : "";
 }
-function renderFormOptions(category = $("group").value, label = $("record-label").value) {
+function selectedRecordLabels() { return [...$("record-label").querySelectorAll("input:checked")].map(input => input.value); }
+function renderFormOptions(category = $("group").value, labelIds = selectedRecordLabels()) {
   selectOptions($("group"), state.categories, "Sem categoria", category);
-  selectOptions($("record-label"), state.labels, "Sem etiqueta", label);
+  $("record-label").replaceChildren();
+  for (const option of state.labels) {
+    const label = document.createElement("label"); label.className = "label-choice";
+    const input = document.createElement("input"); input.type = "checkbox"; input.value = option.id; input.checked = labelIds.includes(option.id);
+    label.append(input, document.createTextNode(option.name)); $("record-label").append(label);
+  }
+  if (!state.labels.length) $("record-label").textContent = "Nenhuma etiqueta cadastrada. Crie uma para começar.";
 }
 function makeCell(text, className = "") {
   const cell = document.createElement("td");
@@ -456,7 +482,7 @@ function renderRow(record) {
   symbol.setAttribute("aria-hidden", "true");
   symbol.textContent = record.description.charAt(0).toLocaleUpperCase("pt-BR");
   description.append(symbol, document.createTextNode(record.description));
-  if (record.salarySource && salaryFor()[record.salarySource].includeInBalance === false) {
+  if (record.includeInBalance === false || (record.salarySource && salaryFor()[record.salarySource].includeInBalance === false)) {
     const note = document.createElement("small");
     note.className = "reference-receipt-note";
     note.textContent = "Já considerado no saldo de referência";
@@ -477,8 +503,10 @@ function renderRow(record) {
     method.textContent = METHODS[record.paymentMethod];
     status.append(method);
   }
-  const label = makeCell(optionName("labels", record.labelId), "label-cell");
-  row.append(type, date, description, status, category, label, makeCell(record.cents === null ? "Sem valor" : currency(record.cents), record.cents === null ? "numeric pending" : "numeric"));
+  const label = makeCell("", "label-cell");
+  for (const id of record.labelIds) { const tag = document.createElement("span"); tag.className = "label-badge"; tag.textContent = optionName("labels", id); label.append(tag); }
+  if (!record.labelIds.length) label.textContent = "Sem etiqueta";
+  row.append(makeCell(String(record.sequenceId), "sequence-cell"), type, date, description, status, category, label, makeCell(record.cents === null ? "Sem valor" : currency(record.cents), record.cents === null ? "numeric pending" : "numeric"));
   const actions = makeCell("");
   const wrapper = document.createElement("div");
   wrapper.className = "row-actions";
@@ -492,6 +520,12 @@ function renderRow(record) {
     button.setAttribute("aria-label", `${text} ${record.description}`);
     button.title = `${text} lançamento`;
     wrapper.append(button);
+  }
+  if (record.type === "income" && record.status === "expected") {
+    const receive = document.createElement("button"); receive.className = "text-button"; receive.type = "button"; receive.textContent = "Receber";
+    receive.setAttribute("aria-label", `Marcar como recebida ${record.description}`);
+    receive.addEventListener("click", () => { openRecord(record); $("record-status").value = "received"; $("record-date").value = todayDate(); updateIncomeOptions(); });
+    wrapper.append(receive);
   }
   actions.append(wrapper);
   row.append(actions);
@@ -548,6 +582,8 @@ function renderManagement() {
   }
 }
 function render() {
+  ensureRecurringMonth();
+  $("category-popover").hidden = true;
   const records = currentRecords();
   const credit = creditRecords(records);
   const totals = InvoiceMath.calculate(credit, state.categories);
@@ -607,16 +643,16 @@ function render() {
   const query = compareName($("search").value);
   const selectedType = $("type-filter").value;
   const visible = records.filter(record => (selectedType === "all" || record.type === selectedType || (selectedType === "credit" && record.type === "expense" && record.paymentMethod === "credit")) && (selectedCategory === "all" || (record.categoryId ?? "none") === selectedCategory) &&
-    (selectedLabel === "all" || (record.labelId ?? "") === selectedLabel) && compareName(record.description).includes(query));
+    (selectedLabel === "all" || (selectedLabel === "" ? !record.labelIds.length : record.labelIds.includes(selectedLabel))) && compareName(record.description).includes(query));
   visible.sort((a, b) => {
-    let comparison = 0;
-    if (recordSort.key === "type") comparison = (a.type === "income" ? 0 : 1) - (b.type === "income" ? 0 : 1);
-    else {
+    const byDate = direction => {
       if (!a.date && b.date) return 1;
       if (a.date && !b.date) return -1;
-      comparison = (a.date ?? "").localeCompare(b.date ?? "");
-    }
-    return (recordSort.direction === "ascending" ? comparison : -comparison) || a.createdOrder - b.createdOrder;
+      return ((a.date ?? "").localeCompare(b.date ?? "") || a.sequenceId - b.sequenceId) * direction;
+    };
+    if (recordSort.key === "date") return byDate(recordSort.direction === "ascending" ? 1 : -1);
+    const typeOrder = ((a.type === "income" ? 0 : 1) - (b.type === "income" ? 0 : 1)) * (recordSort.direction === "ascending" ? 1 : -1);
+    return typeOrder || byDate(-1);
   });
   for (const key of ["type", "date"]) {
     const button = $("sort-" + key);
@@ -637,6 +673,7 @@ function render() {
   $("empty-action").textContent = records.length ? "Limpar filtros" : "Novo lançamento";
   renderFormOptions();
   renderManagement();
+  renderRecurrenceSettings();
   renderDue();
   renderCustomSum();
   renderSalary();
@@ -648,17 +685,20 @@ function openRecord(record = null) {
   editingPeriod = state.period;
   $("record-form").reset();
   $("form-error").hidden = true;
-  for (const id of ["description", "value"]) $(id).removeAttribute("aria-invalid");
+  for (const id of ["description", "value", "record-date", "recurring-day", "record-impact-include"]) $(id).removeAttribute("aria-invalid");
   $("dialog-title").textContent = record ? "Editar lançamento" : "Novo lançamento";
   $("record-period-note").textContent = `Este lançamento pertence a ${periodLabel(editingPeriod)}. O resumo é atualizado automaticamente.`;
   $("description").value = record?.description ?? "";
   const defaultCategory = ["all", "none"].includes(selectedCategory) ? (selectedCategory === "none" ? "" : state.categories[0]?.id ?? "") : selectedCategory;
-  renderFormOptions(record ? record.categoryId ?? "" : defaultCategory, record?.labelId ?? "");
+  renderFormOptions(record ? record.categoryId ?? "" : defaultCategory, record?.labelIds ?? []);
   $("value").value = record?.cents == null ? "" : decimalInput(record.cents);
   $("record-type").value = record?.type ?? "expense";
   $("record-type").disabled = !!record?.salarySource;
   $("record-date").value = record ? record.date ?? "" : defaultRecordDate(state.period);
   $("payment-method").value = record?.paymentMethod ?? "credit";
+  const recurring = state.recurrences.find(item => item.id === record?.recurrenceId);
+  $("record-recurring").checked = recurring?.active ?? false;
+  $("recurring-day").value = recurring?.day ?? Number(todayDate().slice(-2));
   updateRecordFields(record?.status ?? "pending");
   $("record-dialog").showModal();
   $("description").focus();
@@ -686,13 +726,20 @@ function openOption(type, id = null, fromRecord = false) {
 function deleteOption(type, id) {
   const option = state[type].find(option => option.id === id);
   const field = type === "categories" ? "categoryId" : "labelId";
-  const count = Object.values(state.invoices).flat().filter(record => record[field] === id).length;
+  const count = Object.values(state.invoices).flat().filter(record => type === "labels" ? record.labelIds.includes(id) : record[field] === id).length;
   const singular = type === "categories" ? "categoria" : "etiqueta";
   confirmAction(`Excluir ${singular}?`, `“${option.name}” será excluída em todos os meses. ${count ? `${count} lançamento(s) usam esta opção. Escolha para onde transferir os vínculos; os lançamentos e valores serão preservados.` : "Nenhum lançamento está vinculado. Os demais dados serão preservados."}`, "Excluir opção", () => {
     const target = count ? $("transfer-option").value || null : null;
     const candidate = JSON.parse(JSON.stringify(state));
     for (const records of Object.values(candidate.invoices)) {
-      for (const record of records) if (record[field] === id) record[field] = target;
+      for (const record of records) {
+        if (type === "labels" && record.labelIds.includes(id)) { record.labelIds = [...new Set(record.labelIds.flatMap(label => label === id ? target ? [target] : [] : [label]))]; record.labelId = record.labelIds[0] ?? null; }
+        else if (type === "categories" && record[field] === id) record[field] = target;
+      }
+    }
+    for (const template of candidate.recurrences) {
+      if (type === "labels") template.labelIds = [...new Set(template.labelIds.flatMap(label => label === id ? target ? [target] : [] : [label]))];
+      else if (template.categoryId === id) template.categoryId = target;
     }
     candidate[type] = candidate[type].filter(item => item.id !== id);
     try {
@@ -807,7 +854,7 @@ for (const id of ["close-dialog", "cancel-dialog"]) $(id).addEventListener("clic
 $("record-form").addEventListener("submit", event => {
   event.preventDefault();
   $("form-error").hidden = true;
-  for (const id of ["description", "value"]) $(id).removeAttribute("aria-invalid");
+  for (const id of ["description", "value", "record-date", "recurring-day", "record-impact-include"]) $(id).removeAttribute("aria-invalid");
   let invalidField = "description";
   try {
     const description = $("description").value.trim();
@@ -816,7 +863,8 @@ $("record-form").addEventListener("submit", event => {
     invalidField = "value";
     const cents = InvoiceMath.parseMoney($("value").value);
     const categoryId = $("group").value || null;
-    const labelId = $("record-label").value || null;
+    const labelIds = selectedRecordLabels();
+    const labelId = labelIds[0] ?? null;
     if (categoryId && !state.categories.some(category => category.id === categoryId)) throw new Error("Selecione uma categoria válida.");
     if (labelId && !state.labels.some(label => label.id === labelId)) throw new Error("Selecione uma etiqueta válida.");
     const type = $("record-type").value;
@@ -828,10 +876,27 @@ $("record-form").addEventListener("submit", event => {
     if (["received", "paid"].includes(status) && cents === null) { invalidField = "value"; throw new Error("Um valor confirmado precisa ser preenchido."); }
     const paymentMethod = type === "expense" ? $("payment-method").value : null;
     const funding = type === "expense" && paymentMethod !== "credit" ? previousRecord?.funding ?? null : null;
-    const record = { id: editingId ?? newId(), createdOrder: previousRecord?.createdOrder ?? nextCreationOrder(state.invoices[editingPeriod] ?? []), description, categoryId, labelId, cents, type, date, status, paymentMethod, funding, salarySource: previousRecord?.salarySource ?? null };
+    const record = { id: editingId ?? newId(), createdOrder: previousRecord?.createdOrder ?? nextCreationOrder(state.invoices[editingPeriod] ?? []), description, categoryId, labelId, labelIds, sequenceId: previousRecord?.sequenceId, includeInBalance: previousRecord?.includeInBalance ?? true, recurrenceId: previousRecord?.recurrenceId ?? null, cents, type, date, status, paymentMethod, funding, salarySource: previousRecord?.salarySource ?? null };
     const previous = state.invoices[editingPeriod] ?? [];
     const records = editingId ? previous.map(item => item.id === editingId ? record : item) : [...previous, record];
     const candidate = JSON.parse(JSON.stringify(state));
+    if (type === "income" && status === "received" && !record.salarySource) {
+      invalidField = "record-impact-include";
+      const choice = document.querySelector('input[name="record-impact"]:checked')?.value;
+      if (!choice) throw new Error("Escolha se deseja incluir esta entrada nos cálculos do saldo.");
+      record.includeInBalance = choice === "include";
+    }
+    if (type === "income" && !record.salarySource) {
+      let recurring = candidate.recurrences.find(item => item.id === record.recurrenceId);
+      if ($("record-recurring").checked) {
+        invalidField = "value";
+        if (cents === null || cents < 0) throw new Error("Uma entrada recorrente precisa de valor não negativo.");
+        invalidField = "recurring-day";
+        const day = validDayInput($("recurring-day").value);
+        if (!recurring) { recurring = { id: newId(), startPeriod: editingPeriod }; candidate.recurrences.push(recurring); record.recurrenceId = recurring.id; }
+        Object.assign(recurring, { active: true, description, categoryId, labelIds, cents: status === "received" && previousRecord?.recurrenceId ? recurring.cents : cents, day });
+      } else if (recurring) recurring.active = false;
+    } else if (record.recurrenceId) throw new Error("Uma entrada recorrente não pode ser transformada em saída.");
     candidate.invoices[editingPeriod] = records;
     if (record.salarySource) {
       const receipt = candidate.salaryMonths[editingPeriod][record.salarySource];
@@ -845,7 +910,6 @@ $("record-form").addEventListener("submit", event => {
     state = validateState(candidate);
     const saved = saveState();
     $("record-dialog").close();
-    resetFilters();
     render();
     if (saved) notify(editingId ? "Lançamento atualizado." : "Lançamento adicionado.");
   } catch (error) {
@@ -865,7 +929,10 @@ $("records").addEventListener("click", event => {
     const period = state.period;
     confirmAction("Excluir lançamento?", `“${record.description}” será removido somente de ${periodLabel(period)}.${record.salarySource ? " A confirmação desta quinzena também será desfeita." : ""}`, "Excluir lançamento", () => {
       if (record.salarySource) undoSalary(state, period, record.salarySource);
-      else state.invoices[period] = state.invoices[period].filter(item => item.id !== record.id);
+      else {
+        if (record.recurrenceId) { const template = state.recurrences.find(item => item.id === record.recurrenceId); template.skippedPeriods = [...new Set([...template.skippedPeriods, period])]; }
+        state.invoices[period] = state.invoices[period].filter(item => item.id !== record.id);
+      }
       const saved = saveState();
       render();
       if (saved) notify("Lançamento excluído deste mês.");
@@ -938,7 +1005,10 @@ $("option-form").addEventListener("submit", event => {
   const saved = saveState();
   $("option-dialog").close();
   render();
-  if (fromRecord) $(type === "categories" ? "group" : "record-label").value = optionId;
+  if (fromRecord) {
+    if (type === "categories") $("group").value = optionId;
+    else renderFormOptions($("group").value, [...selectedRecordLabels(), optionId]);
+  }
   if (saved) notify(id ? "Nome atualizado em todos os meses." : `${type === "categories" ? "Categoria criada" : "Etiqueta criada"}.`);
 });
 for (const id of ["category-list", "label-list"]) $(id).addEventListener("click", event => {
@@ -963,6 +1033,8 @@ $("clear-data").addEventListener("click", () => confirmAction("Apagar os dados s
   state.invoiceFunding = {};
   state.salaryMonths = {};
   state.balanceRefs = {};
+  state.recurrences = [];
+  state.salaryConfigured = {};
   state.forecastDates = {};
   storageBlocked = false;
   const saved = saveState();
@@ -984,6 +1056,7 @@ function updateRecordFields(preferredStatus = $("record-status").value) {
     $("record-status").append(option);
   }
   $("record-status").value = options.some(([value]) => value === preferredStatus) ? preferredStatus : options[0][0];
+  updateIncomeOptions();
 }
 function setActiveNavigation(href) {
   document.querySelectorAll(".nav-link").forEach(link => {
@@ -1014,6 +1087,12 @@ function validDayInput(value) {
 }
 function renderSalary() {
   const salary = salaryFor();
+  const collapsed = !!state.salaryConfigured[state.period] && editingSalaryPeriod !== state.period;
+  $("salary-config").hidden = collapsed;
+  $("salary-summary").hidden = !collapsed;
+  $("edit-salary").setAttribute("aria-expanded", String(!collapsed));
+  $("salary-summary-values").textContent = `${currency(salary.first.expectedCents)} + ${currency(salary.second.expectedCents)}`;
+  $("salary-summary-dates").textContent = `Dias ${salary.first.day} e ${salary.second.day} · bruto ${currency(salary.grossCents)}`;
   $("salary-period").textContent = `${periodLabel(state.period)} · Configuração e recebimentos deste período`;
   $("salary-gross").value = decimalInput(salary.grossCents);
   for (const id of ["first", "second"]) {
@@ -1075,7 +1154,7 @@ function renderSalary() {
     card.append(heading, expectedValue, amountLine, date, actions);
     const impact = document.createElement("div");
     impact.className = "receipt-impact-note";
-    impact.textContent = !receipt.received ? "Escolha o impacto no saldo ao confirmar o recebimento." : receipt.includeInBalance === false ? "Já considerado no saldo de referência · não somado novamente" : "Incluído nos cálculos do saldo · respeita a data de referência";
+    impact.textContent = !receipt.received ? "Escolha o impacto no saldo ao confirmar o recebimento." : receipt.includeInBalance === false ? "Já considerado no saldo de referência — não soma novamente ao saldo." : "Incluído nos cálculos do saldo · respeita a data de referência";
     if (receipt.received) date.textContent += ` · Previsão original: ${currency(receipt.expectedCents)}`;
     card.classList.add("quarter-column");
     card.append(impact);
@@ -1138,9 +1217,11 @@ $("salary-config").addEventListener("submit", event => {
     const current = salaryFor();
     candidate.salaryMonths[state.period] = { grossCents: defaults.grossCents, first: { ...current.first, expectedCents: defaults.first.cents, day: defaults.first.day }, second: { ...current.second, expectedCents: defaults.second.cents, day: defaults.second.day } };
     candidate.salaryDefaults = defaults;
+    candidate.salaryConfigured[state.period] = true;
     state = validateState(candidate);
     $("salary-config-error").hidden = true;
     const saved = saveState();
+    if (saved) editingSalaryPeriod = null;
     render();
     if (saved) notify("Configuração salva para este mês e para os próximos ainda não configurados.");
   } catch (error) {
@@ -1416,6 +1497,7 @@ function refreshExplanation() {
     value.textContent = currency(item.cents);
     value.classList.toggle("negative-value", item.cents < 0);
     row.append(description, value, date);
+    if (item.inReference) { const notice = document.createElement("small"); notice.className = "reference-receipt-note"; notice.textContent = "Já considerado no saldo de referência — não soma novamente ao saldo."; row.append(notice); }
     $("detail-items").append(row);
   }
   if (!data.items.length) $("detail-items").textContent = "Nenhum item considerado neste total.";
@@ -1490,6 +1572,82 @@ document.addEventListener("keydown", event => {
 });
 window.addEventListener("resize", () => { if (explanationButton) positionExplanation(); });
 window.addEventListener("scroll", () => { if (explanationButton) positionExplanation(); }, true);
+
+// Normalização incremental: IDs e associações legadas permanecem intactos.
+function validateRecurrences(items, categories, labels) {
+  if (!Array.isArray(items)) throw new Error("Recorrências inválidas.");
+  const ids = new Set();
+  return items.map(item => {
+    if (!item || typeof item.id !== "string" || !item.id || ids.has(item.id) || typeof item.active !== "boolean" || !validPeriod(item.startPeriod) || typeof item.description !== "string" || !item.description.trim() || item.description.length > 200 || !Number.isSafeInteger(item.cents) || item.cents < 0 || !Number.isInteger(item.day) || item.day < 1 || item.day > 31 || (item.categoryId !== null && !categories.some(category => category.id === item.categoryId)) || !Array.isArray(item.labelIds) || new Set(item.labelIds).size !== item.labelIds.length || item.labelIds.some(id => !labels.some(label => label.id === id))) throw new Error("Configuração de entrada recorrente inválida.");
+    const skippedPeriods = item.skippedPeriods ?? [];
+    if (!Array.isArray(skippedPeriods) || skippedPeriods.some(period => !validPeriod(period))) throw new Error("Períodos de recorrência inválidos.");
+    ids.add(item.id);
+    return { ...item, skippedPeriods: [...new Set(skippedPeriods)] };
+  });
+}
+function ensureRecurringMonth() {
+  const pending = state.recurrences.filter(item => item.active && state.period >= item.startPeriod && !item.skippedPeriods.includes(state.period) && !currentRecords().some(record => record.recurrenceId === item.id));
+  if (!pending.length) return;
+  try {
+    const candidate = JSON.parse(JSON.stringify(state));
+    const records = candidate.invoices[state.period] ?? [];
+    for (const template of pending) {
+      const [year, month] = state.period.split("-").map(Number);
+      records.push({ id: newId(), createdOrder: nextCreationOrder(records), description: template.description, categoryId: template.categoryId, labelId: template.labelIds[0] ?? null, labelIds: [...template.labelIds], cents: template.cents, type: "income", date: localDateString(DueCalendar.date(year, month - 1, template.day)), status: "expected", paymentMethod: null, funding: null, salarySource: null, recurrenceId: template.id, includeInBalance: true });
+    }
+    candidate.invoices[state.period] = records;
+    state = validateState(candidate);
+    saveState();
+  } catch (error) { notify("Não foi possível gerar a previsão recorrente: " + error.message); }
+}
+function updateIncomeOptions() {
+  const income = $("record-type").value === "income";
+  const linkedSalary = (state.invoices[editingPeriod] ?? []).find(item => item.id === editingId)?.salarySource;
+  $("income-options").hidden = !income || !!linkedSalary;
+  $("income-impact").hidden = !income || $("record-status").value !== "received" || !!linkedSalary;
+  $("recurring-day-field").hidden = !income || !$("record-recurring").checked || !!linkedSalary;
+}
+$("record-status").addEventListener("change", updateIncomeOptions);
+$("record-recurring").addEventListener("change", updateIncomeOptions);
+$("edit-salary").addEventListener("click", () => { editingSalaryPeriod = state.period; renderSalary(); $("salary-gross").focus(); });
+$("open-settings").addEventListener("click", () => { renderRecurrenceSettings(); $("settings-dialog").showModal(); });
+$("close-settings").addEventListener("click", () => $("settings-dialog").close());
+$("settings-dialog").addEventListener("click", event => {
+  const rect = $("settings-dialog").getBoundingClientRect();
+  if (event.target === $("settings-dialog") && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) $("settings-dialog").close();
+});
+function renderRecurrenceSettings() {
+  $("recurrence-list").replaceChildren();
+  const active = state.recurrences.filter(item => item.active);
+  if (!active.length) $("recurrence-list").textContent = "Nenhuma entrada recorrente ativa. Configure no formulário de lançamento.";
+  for (const template of active) {
+    const row = document.createElement("div"); row.className = "option-row";
+    const text = document.createElement("span"); text.textContent = `${template.description} · dia ${template.day} · ${currency(template.cents)}`;
+    const stop = document.createElement("button"); stop.className = "button secondary"; stop.textContent = "Parar recorrência";
+    stop.addEventListener("click", () => confirmAction("Parar recorrência?", "Nenhuma previsão nova será gerada. Os lançamentos existentes serão preservados.", "Parar", () => { template.active = false; saveState(); renderRecurrenceSettings(); render(); }));
+    row.append(text, stop); $("recurrence-list").append(row);
+  }
+}
+function categorySummary(button) {
+  const id = button.dataset.category;
+  if (!id || id === "all") return;
+  const type = $("type-filter").value;
+  const query = compareName($("search").value);
+  const records = currentRecords().filter(record => (record.categoryId ?? "none") === id && (type === "all" || record.type === type || (type === "credit" && record.type === "expense" && record.paymentMethod === "credit")) && (selectedLabel === "all" || (selectedLabel === "" ? !record.labelIds.length : record.labelIds.includes(selectedLabel))) && compareName(record.description).includes(query));
+  if (!records.some(record => record.cents !== null)) return;
+  const popup = $("category-popover");
+  popup.textContent = `${button.textContent} · ${records.length} ${records.length === 1 ? "lançamento" : "lançamentos"} · ${currency(InvoiceMath.sum(records))}`;
+  popup.hidden = false;
+  button.setAttribute("aria-describedby", "category-popover");
+  const rect = button.getBoundingClientRect();
+  popup.style.left = `${Math.max(12, Math.min(rect.left, innerWidth - popup.offsetWidth - 12))}px`;
+  popup.style.top = `${Math.max(12, rect.top - popup.offsetHeight - 8)}px`;
+}
+$("category-tabs").addEventListener("pointerover", event => { const button = event.target.closest("button[data-category]"); if (button) categorySummary(button); });
+$("category-tabs").addEventListener("pointerout", () => { $("category-popover").hidden = true; });
+$("category-tabs").addEventListener("focusin", event => { const button = event.target.closest("button[data-category]"); if (button) categorySummary(button); });
+$("category-tabs").addEventListener("focusout", () => { $("category-popover").hidden = true; });
+window.addEventListener("scroll", () => { $("category-popover").hidden = true; }, true);
 
 render();
 if (!storageBlocked) {

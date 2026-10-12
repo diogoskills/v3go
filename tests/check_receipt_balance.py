@@ -21,6 +21,10 @@ with sync_playwright() as playwright:
     page.on('pageerror',lambda error: errors.append(str(error)))
     page.clock.install(time=datetime(2026,10,16,15))
     page.goto(url)
+    page.locator("#tab-salary").click()
+    page.locator("#salary-second").fill("750,00")
+    page.locator("#salary-config").evaluate("form=>form.requestSubmit()")
+    page.locator("#tab-monthly").click()
     assert page.locator('#balance-editor').is_visible()
     page.locator('#bank-balance').fill('1000,00')
     page.locator('#balance-date').fill('2026-10-12')
@@ -49,7 +53,7 @@ with sync_playwright() as playwright:
         action='Corrigir recebimento' if correction else 'Marcar como recebida'
         page.get_by_role('button',name=f'{action}: {name}',exact=True).click()
         assert page.locator('input[name="receipt-impact"]:checked').count()==0
-        assert page.get_by_text('Deseja incluir este recebimento nos cálculos do saldo?',exact=True).is_visible()
+        assert page.locator('#receipt-dialog').get_by_text('Deseja incluir este recebimento nos cálculos do saldo?',exact=True).is_visible()
         page.locator('#receipt-value').fill(value)
         page.locator('#receipt-date').fill(date)
         page.locator('#receipt-form').evaluate('(form) => form.requestSubmit()')
@@ -131,8 +135,8 @@ with sync_playwright() as playwright:
     assert touch.locator('#balance-editor').is_visible()
     touch.locator('#nav-salary').tap()
     touch.get_by_role('button',name='Corrigir recebimento: Primeira quinzena',exact=True).tap()
-    touch.locator('.choice-option').last.tap()
-    assert touch.locator('input[value="reference"]').is_checked()
+    touch.locator('#receipt-dialog .choice-option').last.tap()
+    assert touch.locator('#receipt-dialog input[value="reference"]').is_checked()
     touch.get_by_role('button',name='Confirmar recebimento',exact=True).tap()
     assert not touch.locator('#receipt-dialog').is_visible()
     assert touch.evaluate('salaryFor().first.includeInBalance') is False

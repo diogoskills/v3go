@@ -49,6 +49,8 @@ def add(page, description, value, kind="expense", method="credit", status="pendi
         page.locator("#payment-method").select_option(method)
     page.locator("#record-status").select_option(status)
     page.locator("#group").select_option(category)
+    if kind == "income" and status == "received":
+        page.locator('input[name="record-impact"][value="include"]').check()
     page.get_by_role("button", name="Salvar lançamento", exact=True).click()
     assert not page.locator("#record-dialog").is_visible(), page.locator("#form-error").inner_text()
 
@@ -114,7 +116,7 @@ with sync_playwright() as playwright:
         period(page, month, year)
         f = finance(page)
         assert f["invoice"] == f["spending"] == f["incomeReceived"] == f["available"] == 0
-        assert f["incomeExpected"] == f["projected"] == 161600
+        assert f["incomeExpected"] == f["projected"] == 161684
         assert page.locator("#records tr").count() == 0
     assert page.evaluate("Object.keys(state.invoices).length") == 0
     assert page.evaluate("InvoiceMath.sum([{cents:10},{cents:20}])") == 30
@@ -122,8 +124,8 @@ with sync_playwright() as playwright:
     period(page, 10)
     view(page, "salary")
     assert page.locator("#salary-gross").input_value() == "1772,00"
-    assert page.locator("#salary-net").inner_text() == "R$\xa01.616,00"
-    assert page.locator("#salary-difference").inner_text() == "R$\xa0156,00"
+    assert page.locator("#salary-net").inner_text() == "R$\xa01.616,84"
+    assert page.locator("#salary-difference").inner_text() == "R$\xa0155,16"
     assert page.locator(".receipt-status.received").count() == 0
     assert page.evaluate('receiptDate("2026-02", {day:31})') == "2026-02-28"
     assert page.evaluate('receiptDate("2028-02", {day:31})') == "2028-02-29"
@@ -131,6 +133,8 @@ with sync_playwright() as playwright:
     assert page.evaluate('localDateString(DueCalendar.calculate("2027-01",5).previous)') == "2026-12-05"
     print("PASS: empty ledger, all initial categories, salary only projected, gross excluded, exact cents and calendar edges")
 
+    page.locator("#salary-second").fill("750,00")
+    page.get_by_role("button", name="Salvar configuração de salário", exact=True).click()
     set_balance(page, "0,00", "2026-10-01")
     receive(page, "first", "870,00", "2026-10-03")
     f = finance(page)
@@ -209,6 +213,8 @@ with sync_playwright() as playwright:
     assert finance(page)["invoice"] == finance(page)["incomeReceived"] == finance(page)["available"] == 0
     assert finance(page)["incomeExpected"] == 161600
     view(page, "salary")
+    if page.locator("#edit-salary").is_visible():
+        page.locator("#edit-salary").click()
     page.locator("#salary-gross").fill("1900,00")
     page.locator("#salary-first").fill("1000,00")
     page.locator("#salary-first-day").fill("20")
@@ -267,6 +273,7 @@ with sync_playwright() as playwright:
     assert page.locator("#group").input_value() == extra
     page.get_by_role("button", name="Salvar lançamento", exact=True).click()
     assert finance(page)["invoice"] == 46010
+    page.locator("#open-settings").click()
     page.get_by_role("button", name="Renomear categoria Categoria adicional", exact=True).click()
     page.locator("#option-name").fill("Categoria renomeada")
     page.get_by_role("button", name="Salvar opção", exact=True).click()
@@ -276,6 +283,7 @@ with sync_playwright() as playwright:
     page.locator("#confirm-ok").click()
     assert finance(page)["invoice"] == 46010
     assert "Sem categoria" in page.locator("#combined-label").inner_text()
+    page.locator("#close-settings").click()
     page.locator("#sum-categories").click()
     page.locator("#sum-none").click()
     page.locator('[data-sum-category="uncategorized"]').check()
@@ -314,6 +322,10 @@ with sync_playwright() as playwright:
     sample.on("pageerror", lambda error: errors.append(str(error)))
     sample.clock.install(time=datetime(2026,10,12,15))
     sample.goto(URL)
+    sample.locator("#tab-salary").click()
+    sample.locator("#salary-second").fill("750,00")
+    sample.locator("#salary-config").evaluate("form=>form.requestSubmit()")
+    sample.locator("#tab-monthly").click()
     assert sample.locator("#balance-date").input_value() == "2026-10-12"
     receive(sample,"first","866,00","2026-10-05")
     add(sample,"Saída pendente do exemplo","644,72",method="pix",date="2026-10-15")

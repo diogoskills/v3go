@@ -10,13 +10,13 @@ Uma base nova não contém lançamentos, compras, pagamentos ou recebimentos con
 
 ## Visão mensal e lançamentos
 
-Selecione mês e ano no cabeçalho. A tabela permite adicionar, editar e excluir entradas e saídas, com descrição, valor, data, categoria e uma etiqueta opcional. Entradas podem ser Previstas ou Recebidas; saídas, Pendentes ou Pagas. As formas de pagamento incluem cartão de crédito, Pix, débito, dinheiro, transferência e outro.
+Selecione mês e ano no cabeçalho. A tabela permite adicionar, editar e excluir entradas e saídas, com descrição, valor, data, categoria e várias etiquetas opcionais. Entradas podem ser Previstas ou Recebidas; saídas, Pendentes ou Pagas. As formas de pagamento incluem cartão de crédito, Pix, débito, dinheiro, transferência e outro.
 
 A data de um novo lançamento começa na data atual do dispositivo, mesmo se o período selecionado for diferente. Pode ser alterada; ao salvar uma data vazia, usa-se hoje. Editar mantém os vínculos de planejamento existentes; não há mais metodologia de vincular despesas às quinzenas na interface. Metadados antigos são preservados no armazenamento para não apagar informações existentes, mas não participam dos cálculos.
 
-Os cabeçalhos **Tipo** e **Data** são botões: Tipo alterna entradas/saídas primeiro; Data alterna mais recentes/mais antigos primeiro. A seta e o atributo acessível indicam a ordenação ativa. A ordem inicial é por data mais recente. Datas iguais preservam a ordem de criação, inclusive após editar ou recarregar; datas históricas não informadas ficam ao final. A ordenação afeta somente a consulta.
+Os cabeçalhos **Tipo** e **Data** são botões: Tipo alterna entradas/saídas primeiro; Data alterna mais recentes/mais antigos primeiro. A seta e o atributo acessível indicam a ordenação ativa. A ordem inicial é por data mais recente. Cada lançamento recebe um **ID sequencial único e permanente**. Datas iguais usam ID maior primeiro em recentes e menor primeiro em antigos. Dentro de cada grupo por Tipo, a ordem é por data mais recente e ID decrescente. IDs não mudam ao editar e não são reutilizados ao excluir; datas históricas não informadas ficam ao final. A ordenação afeta somente a consulta.
 
-Os filtros de tipo, categoria, etiqueta e descrição afetam somente a tabela. A soma dos valores exibidos é uma consulta de valores, não um saldo líquido. A composição e a soma personalizada por categorias continuam disponíveis e consideram somente as compras no cartão que compõem a fatura.
+Os filtros de tipo, categoria, etiqueta, descrição e a ordenação são preservados ao adicionar, editar, excluir, receber entradas ou pagar faturas. Afetam somente a tabela. Selecionar várias etiquetas não duplica valores; o filtro encontra qualquer lançamento que contenha a etiqueta escolhida. Na faixa de categorias de Lançamentos, hover ou foco mostra quantidade e soma do período com os filtros ativos de tipo, etiqueta e busca, ignorando a categoria anteriormente selecionada. O resumo só aparece quando há algum valor preenchido. A soma dos valores exibidos é uma consulta de valores, não um saldo líquido. A composição e a soma personalizada por categorias continuam disponíveis e consideram somente as compras no cartão que compõem a fatura.
 
 Valores em branco ficam fora dos cálculos; uma confirmação de novo lançamento precisa de um valor. Valores negativos permitem ajustes e invertem o efeito do lançamento. Os cálculos e a formatação usam centavos inteiros, sem arredondar valores monetários intermediários.
 
@@ -72,11 +72,13 @@ A aba tem os seguintes padrões editáveis:
 | --- | --- |
 | Salário bruto de referência | R$ 1.772,00 |
 | Primeira quinzena prevista | R$ 866,00 — dia 05 |
-| Segunda quinzena prevista | R$ 750,00 — dia 15 |
+| Segunda quinzena prevista | R$ 750,84 — dia 15 |
 
-As previsões somam R$ 1.616,00. A diferença de R$ 156,00 em relação ao bruto é informativa, sem presumir descontos ou gerar despesa. O bruto não vira uma terceira entrada.
+As previsões iniciais somam R$ 1.616,84. A diferença de R$ 155,16 em relação ao bruto é informativa, sem presumir descontos ou gerar despesa. O bruto não vira uma terceira entrada.
 
-Cada quinzena tem **Marcar como recebida**, podendo receber antes da data prevista. Informe a data real e o valor efetivo. O status passa a **Recebida**, em verde, e os saldos são atualizados conforme a escolha de inclusão e a referência. **Corrigir recebimento** substitui o valor/data da mesma confirmação e entrada; **Desfazer** devolve-a a prevista e remove a entrada recebida vinculada. Editar o valor/data dessa entrada na tabela atualiza a confirmação. Alterá-la para Prevista ou excluí-la também desfaz o recebimento. A descrição, categoria e etiqueta editadas são preservadas ao corrigir o recebimento. Essas operações são independentes por quinzena, mês e ano. Uma quinzena confirmada cria ou atualiza uma única entrada vinculada na tabela, com descrição, valor e data real. Essa entrada é o mesmo recebimento, não um segundo valor.
+O formulário fica aberto antes do primeiro preenchimento. Após salvar, aparece um resumo com valores, dias e **Editar** para reabrir os campos. Configurações antigas salvas também são recolhidas. O padrão novo de R$ 750,84 se aplica apenas a bases novas e campos sem valor, preservando valores personalizados, inclusive o antigo padrão de R$ 750,00 que já estava salvo.
+
+Cada quinzena tem **Marcar como recebida**, podendo receber antes da data prevista. Informe a data real e o valor efetivo. O status passa a **Recebida**, em verde, e os saldos são atualizados conforme a escolha de inclusão e a referência. **Corrigir recebimento** substitui o valor/data da mesma confirmação e entrada; **Desfazer** devolve-a a prevista e remove a entrada recebida vinculada. Editar o valor/data dessa entrada na tabela atualiza a confirmação. Alterá-la para Prevista ou excluí-la também desfaz o recebimento. A descrição, categoria e etiquetas editadas são preservadas ao corrigir o recebimento. Essas operações são independentes por quinzena, mês e ano. Uma quinzena confirmada cria ou atualiza uma única entrada vinculada na tabela, com descrição, valor e data real. Essa entrada é o mesmo recebimento, não um segundo valor.
 
 Ao salvar a configuração de salário, ela vale para o mês selecionado e como padrão dos meses ainda não configurados. Confirmar um recebimento salva a configuração mensal completa, incluindo previsões e valores reais. Alterar padrões em outro mês não modifica essa configuração salva nem os recebimentos já confirmados.
 
@@ -93,15 +95,23 @@ A escolha é independente por quinzena, mês e ano; pode ser alterada em **Corri
 
 A ação **Corrigir pagamento da fatura** fica junto ao vencimento/status quando existe um pagamento, preservando a correção de valor e data após remover as listas de compromissos.
 
+## Entradas previstas e recorrentes
+
+Uma entrada **Prevista** compõe as previsões conforme sua data, sem aumentar o disponível. Use **Receber** na linha ou edite para **Recebida**: o mesmo ID é mantido e a escolha de inclusão no saldo é obrigatória. Entradas já consideradas na referência permanecem nos totais históricos e são excluídas somente dos saldos. O aviso **Já considerado no saldo de referência — não soma novamente ao saldo.** aparece junto ao item em **? Entradas recebidas** e no cartão da quinzena correspondente.
+
+No formulário de uma entrada, marque **Entrada recorrente mensal** e informe o dia de 1 a 31. A data do primeiro lançamento é a informada no formulário; o dia configurado vale para as próximas previsões. O padrão gera uma previsão por mês a partir do período selecionado, quando esse mês é aberto. Dias inexistentes usam o último dia. Recarregar não duplica previsões e recebimentos confirmados de outros meses permanecem intactos. Editar um padrão afeta os próximos meses ainda não gerados; lançamentos gerados são preservados. Excluir a entrada de um mês impede sua recriação naquele período. **Parar recorrência**, nas Configurações, interrompe novas previsões e mantém as antigas. O módulo de salário continua independente e seus recebimentos não oferecem uma segunda recorrência.
+
 ## Categorias, etiquetas e vencimento
 
-Categorias e etiquetas são globais, com criação no formulário e gerenciamento nas Configurações. Nomes vazios, duplicados ou reservados são rejeitados; a comparação normaliza espaços, maiúsculas, minúsculas e acentos. Renomear atualiza os vínculos; excluir pede confirmação e permite transferir ou deixar sem classificação, preservando lançamentos e valores.
+A engrenagem no cabeçalho abre todas as Configurações em um modal com fundo desfocado, fechamento por botão, Esc ou clique fora e rolagem interna. Categorias e etiquetas são globais, com criação no formulário e gerenciamento nas Configurações. Nomes vazios, duplicados ou reservados são rejeitados; a comparação normaliza espaços, maiúsculas, minúsculas e acentos. Renomear atualiza os vínculos; excluir pede confirmação e permite transferir ou deixar sem classificação, preservando lançamentos e valores.
 
 O vencimento padrão é dia 05, editável entre 1 e 31 para todos os meses. Quando o dia não existe, usa-se o último dia. A barra considera o intervalo entre os vencimentos consecutivos, com datas locais e diferenças em dias civis. Texto e cores distinguem proximidade, data passada, pagamento parcial e fatura paga.
 
 ## Armazenamento e migração
 
-A versão atual usa `v3go.invoice.v5` em `localStorage`, contendo lançamentos mensais, categorias/etiquetas, salário padrão, configurações e recebimentos mensais (incluindo a escolha `includeInBalance` de cada quinzena), metadados de planejamento antigos preservados, pagamento da fatura, imagem personalizada, referências de saldo e datas de previsão por mês e ano. Use o mesmo navegador e endereço do site para restaurar esses dados. Não há sincronização entre dispositivos.
+A versão atual usa `v3go.invoice.v5` em `localStorage`, contendo lançamentos mensais, categorias/etiquetas, salário padrão, configurações e recebimentos mensais (incluindo a escolha `includeInBalance`), IDs sequenciais e seu contador, listas de etiquetas, padrões recorrentes e configuração salarial recolhida, metadados de planejamento antigos preservados, pagamento da fatura, imagem personalizada, referências de saldo e datas de previsão por mês e ano. Use o mesmo navegador e endereço do site para restaurar esses dados. Não há sincronização entre dispositivos.
+
+Registros atuais antigos são normalizados preservando seus identificadores internos e valores: recebem IDs sequenciais, a etiqueta única vira uma lista e escolhas antigas de saldo permanecem conforme as datas.
 
 Versões anteriores são migradas sem apagar dados e suas chaves são mantidas como cópias de segurança:
 
@@ -139,11 +149,13 @@ A suíte `tests/check_redesign.py` verifica data automática e manual, fallback 
 
 A suíte `tests/check_receipt_balance.py` verifica recolhimento/edição/persistência do saldo, escolha obrigatória em toda confirmação, inclusão/exclusão nos dois saldos, preservação das entradas históricas, correção sem duplicidade, compatibilidade dos recebimentos antigos e layout responsivo.
 
-Para executar, use `python tests/check_browser.py`, `python tests/check_redesign.py` e `python tests/check_receipt_balance.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
+A suíte `tests/check_registry_features.py` verifica configurações em modal, IDs e desempate, filtros preservados, múltiplas etiquetas/migração/transferência, resumo contextual de categorias, aviso nos recebimentos, salário recolhido, recorrências por mês/ano sem duplicidade, exclusão sem recriação, interrupção de padrões, validação e textos tratados sem execução de HTML.
+
+Para executar, use `python tests/check_browser.py`, `python tests/check_redesign.py`, `python tests/check_receipt_balance.py` e `python tests/check_registry_features.py` em um ambiente com Python, Playwright e Chromium instalado. A suíte inicia um servidor local temporário e utiliza somente dados fictícios de teste. Esses programas não são necessários para usar o site. O navegador gerenciado do ambiente bloqueia `file://`, por isso os testes usam HTTP local.
 
 ## Arquivos
 
 - `v3go web/index.html`, `style.css`, `script.js`: aplicação completa.
 - `v3go web.zip`: cópia dos três arquivos para distribuição.
-- `tests/check_browser.py`, `tests/check_redesign.py` e `tests/check_receipt_balance.py`: regressão financeira e de interface.
+- `tests/check_browser.py`, `tests/check_redesign.py` e `tests/check_receipt_balance.py` e `tests/check_registry_features.py`: regressão financeira e de interface.
 - `New Fatura Junho 2026.xlsx` e `prompt.txt`: referência histórica, sem importação automática.

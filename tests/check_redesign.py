@@ -41,14 +41,14 @@ with sync_playwright() as playwright:
     add('Mais recente', 'income', '2026-10-20')
     def names():
         return page.locator('#records .description-cell').evaluate_all('cells => cells.map(cell => cell.lastChild.textContent)')
-    assert names() == ['Mais recente', 'Primeiro criado', 'Segundo criado', 'Mais antigo']
+    assert names() == ['Mais recente', 'Segundo criado', 'Primeiro criado', 'Mais antigo']
     assert page.locator('#sort-date').locator('..').get_attribute('aria-sort') == 'descending'
     page.locator('#sort-date').click()
     assert names() == ['Mais antigo', 'Primeiro criado', 'Segundo criado', 'Mais recente']
     page.locator('#sort-type').click()
-    assert names() == ['Segundo criado', 'Mais recente', 'Primeiro criado', 'Mais antigo']
+    assert names() == ['Mais recente', 'Segundo criado', 'Primeiro criado', 'Mais antigo']
     page.locator('#sort-type').click()
-    assert names() == ['Primeiro criado', 'Mais antigo', 'Segundo criado', 'Mais recente']
+    assert names() == ['Primeiro criado', 'Mais antigo', 'Mais recente', 'Segundo criado']
     before = page.evaluate('financeFor()')
     # Preserve a planning link while editing in the simplified form.
     rid = page.evaluate('currentRecords()[0].id')
@@ -65,9 +65,9 @@ with sync_playwright() as playwright:
     assert record['date'] == '2026-10-12' and record['funding'] is None and record['createdOrder'] == 0
     assert page.evaluate('financeFor()') == before
     page.reload()
-    assert names() == ['Mais recente', 'Primeiro criado', 'Segundo criado', 'Mais antigo']
+    assert names() == ['Mais recente', 'Segundo criado', 'Primeiro criado', 'Mais antigo']
     assert page.evaluate('currentRecords().map(r => r.createdOrder)') == [0,1,2,3]
-    for href in ['#lancamentos', '#configuracoes', '#regras', '#inicio']:
+    for href in ['#lancamentos', '#regras', '#inicio']:
         page.locator(f'.nav-link[href="{href}"]').click()
         assert page.locator('.nav-link.active').count() == 1
         assert page.locator('.nav-link.active').get_attribute('href') == href
@@ -112,7 +112,7 @@ with sync_playwright() as playwright:
     boxes = page.locator('.quarter-column').evaluate_all('cards => cards.map(c => ({x:c.getBoundingClientRect().x,y:c.getBoundingClientRect().y}))')
     assert boxes[0]['x'] == boxes[1]['x'] and boxes[0]['y'] < boxes[1]['y']
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    assert page.locator('.nav-link:visible').count() == 5
+    assert page.locator('.nav-link:visible').count() == 4
     page.get_by_role('button', name='Marcar como recebida: Primeira quinzena', exact=True).tap()
     assert page.locator('#receipt-dialog').is_visible()
     page.locator('#receipt-dialog').evaluate('(dialog) => dialog.close()')
