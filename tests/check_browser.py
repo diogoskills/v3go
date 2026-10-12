@@ -1,5 +1,4 @@
-"""Regressão do site. Dados fictícios abaixo são exclusivos dos testes."""
-from datetime import datetime
+"""Regressão financeira. Os lançamentos fictícios existem somente nesta suíte."""
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,21 +14,17 @@ class QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
-root = Path(__file__).resolve().parents[1]
-server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(root / "v3go web")))
+ROOT = Path(__file__).resolve().parents[1]
+server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(ROOT / "v3go web")))
 threading.Thread(target=server.serve_forever, daemon=True).start()
 atexit.register(server.server_close)
 atexit.register(server.shutdown)
 URL = f"http://127.0.0.1:{server.server_port}/index.html"
-KEY = "v3go.invoice.v3"
+KEY = "v3go.invoice.v4"
 
 
-def total(page):
-    return page.evaluate("InvoiceMath.calculate(currentRecords(), state.categories).total")
-
-
-def custom_total(page):
-    return page.evaluate("InvoiceMath.selectedTotal(currentRecords(), customSelection)")
+def finance(page):
+    return page.evaluate("financeFor()")
 
 
 def period(page, month, year=2026):
@@ -38,275 +33,302 @@ def period(page, month, year=2026):
     page.locator("#period-month").select_option(f"{month:02d}")
 
 
-def add(page, description, value, category="fixed", label=""):
+def view(page, tab="monthly"):
+    page.locator("#tab-" + tab).click()
+
+
+def add(page, description, value, kind="expense", method="credit", status="pending", category="fixed", funding="", date="2026-10-04"):
+    view(page)
     page.locator("#add-record").click()
     page.locator("#description").fill(description)
     page.locator("#value").fill(value)
+    page.locator("#record-type").select_option(kind)
+    page.locator("#record-date").fill(date)
+    if kind == "expense":
+        page.locator("#payment-method").select_option(method)
+    page.locator("#record-status").select_option(status)
     page.locator("#group").select_option(category)
-    page.locator("#record-label").select_option(label)
+    if kind == "expense" and method != "credit":
+        page.locator("#record-funding").select_option(funding)
     page.get_by_role("button", name="Salvar lançamento", exact=True).click()
+    assert not page.locator("#record-dialog").is_visible(), page.locator("#form-error").inner_text()
 
 
-def create(page, name, kind="category", inline=False):
-    page.locator(f"#{'create' if inline else 'manage-add'}-{kind}").click()
+def receive(page, which, value, date, correct=False):
+    view(page, "salary")
+    prefix = "Corrigir recebimento" if correct else "Marcar como recebida"
+    name = "Primeira quinzena" if which == "first" else "Segunda quinzena"
+    page.get_by_role("button", name=f"{prefix}: {name}", exact=True).click()
+    page.locator("#receipt-value").fill(value)
+    page.locator("#receipt-date").fill(date)
+    page.get_by_role("button", name="Confirmar recebimento", exact=True).click()
+    assert not page.locator("#receipt-dialog").is_visible()
+
+
+def pay(page, value, date="2026-10-05", edit=False):
+    view(page)
+    page.locator("#edit-invoice-payment" if edit else "#toggle-payment").click()
+    page.locator("#settlement-value").fill(value)
+    page.locator("#settlement-date").fill(date)
+    page.get_by_role("button", name="Confirmar pagamento", exact=True).click()
+    assert not page.locator("#settlement-dialog").is_visible()
+
+
+def create_category(page, name, inline=False):
+    page.locator("#create-category" if inline else "#manage-add-category").click()
     page.locator("#option-name").fill(name)
     page.get_by_role("button", name="Salvar opção", exact=True).click()
-    options = "categories" if kind == "category" else "labels"
-    return page.evaluate("([type,name]) => state[type].find(x => x.name === name).id", [options, name])
-
-
-def rename(page, name, new_name, kind="categoria"):
-    page.get_by_role("button", name=f"Renomear {kind} {name}", exact=True).click()
-    page.locator("#option-name").fill(new_name)
-    page.get_by_role("button", name="Salvar opção", exact=True).click()
-
-
-def delete(page, name, target="", kind="categoria"):
-    page.get_by_role("button", name=f"Excluir {kind} {name}", exact=True).click()
-    if page.locator("#transfer-field").is_visible():
-        page.locator("#transfer-option").select_option(target)
-    page.locator("#confirm-ok").click()
+    return page.evaluate("name=>state.categories.find(x=>x.name===name).id", name)
 
 
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(executable_path=shutil.which("chromium"), headless=True, args=["--no-sandbox"])
-    context = browser.new_context(viewport={"width": 1440, "height": 1050}, timezone_id="America/Sao_Paulo")
+    context = browser.new_context(viewport={"width": 1440, "height": 1000}, timezone_id="America/Sao_Paulo")
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(URL)
-    assert page.evaluate("state.version") == 3
-    for year in (2026, 2027):
-        for month in range(1, 13):
-            period(page, month, year)
-            assert total(page) == 0 and page.locator("#records tr").count() == 0
-            assert page.locator(".category-summary").count() == 3
-            assert page.locator("#due-message").inner_text() != "Fatura paga"
-    page.reload()
-    assert total(page) == 0
-    assert page.evaluate("Object.values(state.invoices).flat().length") == 0
+    assert page.evaluate("state.version") == 4
+    names = page.evaluate("state.categories.map(x=>x.name)")
+    assert len(names) == len(set(names)) == 11
+    assert {"Fixos", "Flexíveis", "Alimentação", "Transporte", "Moradia", "Saúde", "Educação", "Lazer", "Compras", "Outros", "Moisés"} == set(names)
+    for month, year in [(10, 2026), (11, 2026), (10, 2027)]:
+        period(page, month, year)
+        f = finance(page)
+        assert f["invoice"] == f["spending"] == f["incomeReceived"] == f["available"] == 0
+        assert f["incomeExpected"] == f["projected"] == 161600
+        assert page.locator("#records tr").count() == 0
+    assert page.evaluate("Object.keys(state.invoices).length") == 0
     assert page.evaluate("InvoiceMath.sum([{cents:10},{cents:20}])") == 30
     assert page.evaluate("currency(9007199254740991)") == "R$\xa090.071.992.547.409,91"
-    assert page.evaluate('InvoiceMath.parseMoney("90071992547409,91")') == 9007199254740991
-    print("PASS: new base empty for all months in two years, reload, exact cents")
-
     period(page, 10)
-    add(page, "Registro de teste A", "10,10")
-    add(page, "Registro de teste B", "20,20", "flexible")
-    add(page, "Registro de teste C", "3,30", "")
-    add(page, "Registro sem valor", "", "moises")
-    assert total(page) == 3360
-    assert page.locator("#combined-total").inner_text() == page.locator("#total").inner_text()
-    assert page.locator("#combined-label").inner_text() == "Fixos + Flexíveis + Moisés + Sem categoria"
+    view(page, "salary")
+    assert page.locator("#salary-gross").input_value() == "1772,00"
+    assert page.locator("#salary-net").inner_text() == "R$\xa01.616,00"
+    assert page.locator("#salary-difference").inner_text() == "R$\xa0156,00"
+    assert page.locator(".receipt-status.received").count() == 0
+    assert page.evaluate('receiptDate("2026-02", {day:31})') == "2026-02-28"
+    assert page.evaluate('receiptDate("2028-02", {day:31})') == "2028-02-29"
+    assert page.evaluate('validDate("2026-02-30")') is False
+    assert page.evaluate('localDateString(DueCalendar.calculate("2027-01",5).previous)') == "2026-12-05"
+    print("PASS: empty ledger, all initial categories, salary only projected, gross excluded, exact cents and calendar edges")
+
+    receive(page, "first", "870,00", "2026-10-03")
+    f = finance(page)
+    assert f["incomeReceived"] == f["available"] == 87000
+    assert f["incomeExpected"] == 75000
+    assert page.evaluate('salaryFor().first.actualDate') == "2026-10-03"
+    assert page.locator(".receipt-status.received").count() == 1
+    assert not page.evaluate('state.payments[state.period] === true')
+    receive(page, "first", "870,00", "2026-10-03", correct=True)
+    assert finance(page)["incomeReceived"] == 87000
+    add(page, "Entrada real de teste", "100,00", kind="income", status="received")
+    add(page, "Entrada prevista de teste", "200,00", kind="income", status="expected")
+    add(page, "Pix pago de teste", "20,00", method="pix", status="paid", funding="first", date="2026-10-02")
+    add(page, "Despesa pendente de teste", "50,00", method="debit", funding="second", date="2026-10-12")
+    add(page, "Compra cartão A", "300,00", status="paid")
+    add(page, "Compra cartão B", "150,00", category="transport")
+    f = finance(page)
+    assert f == {"invoice": 45000, "invoicePaid": 0, "invoiceRemaining": 45000, "incomeReceived": 97000, "incomeExpected": 95000, "expensePaid": 2000, "expensePending": 50000, "spending": 52000, "available": 95000, "projected": 140000}, f
+    assert page.locator("#records tr").count() == 6  # Salary receipt is not inserted twice into the ledger.
     page.locator("#sum-categories").click()
-    assert custom_total(page) == 3360
-    assert page.locator("#sum-options input:checked").count() == 4
-    page.locator("#sum-none").click()
-    assert custom_total(page) == 0
-    assert page.locator("#custom-total").inner_text() == "R$\xa00,00"
-    page.locator('[data-sum-category="fixed"]').check()
-    assert custom_total(page) == 1010
-    assert page.locator("#custom-expression").inner_text() == "Fixos"
-    assert total(page) == 3360
-    page.locator('[data-sum-category="uncategorized"]').check()
-    assert custom_total(page) == 1340
-    page.locator("#sum-all").click()
-    assert custom_total(page) == 3360
-    page.locator("#close-sum").click()
-    page.locator("#sum-categories").click()
-    assert page.locator("#sum-options input:checked").count() == 4
-    print("PASS: dynamic composition, unassigned entries, empty values, custom selections, all/none and reopening defaults")
-
+    assert page.evaluate("InvoiceMath.selectedTotal(creditRecords(),customSelection)") == 45000
     page.locator("#sum-none").click()
     page.locator('[data-sum-category="fixed"]').check()
-    period(page, 11)
-    assert total(page) == 0 and custom_total(page) == 0
-    add(page, "Novembro teste", "5,50")
-    assert total(page) == 550 and custom_total(page) == 550
-    period(page, 10)
-    assert total(page) == 3360 and custom_total(page) == 1010
-    page.locator("#records tr").first.locator("[data-action=edit]").click()
-    page.locator("#value").fill("11,11")
-    page.get_by_role("button", name="Salvar lançamento", exact=True).click()
-    assert total(page) == 3461 and custom_total(page) == 1111
-    period(page, 11)
-    assert total(page) == 550
-    page.locator("#records tr").first.locator("[data-action=delete]").click()
-    page.locator("#confirm-cancel").click()
-    assert total(page) == 550
-    page.locator("#records tr").first.locator("[data-action=delete]").click()
-    page.locator("#confirm-ok").click()
-    assert total(page) == 0 and custom_total(page) == 0
-    period(page, 10)
-    assert total(page) == 3461
-    print("PASS: custom result responds to month changes and CRUD; monthly data remains isolated")
+    assert page.evaluate("InvoiceMath.selectedTotal(creditRecords(),customSelection)") == 30000
+    assert finance(page)["spending"] == 52000
+    page.locator("#invoice-funding").select_option("first")
+    pay(page, "450,00")
+    f = finance(page)
+    assert f["expensePaid"] == 47000 and f["expensePending"] == 5000
+    assert f["available"] == 50000 and f["projected"] == 140000
+    assert f["spending"] == 52000 and page.locator("#records tr").count() == 6
+    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    print("PASS: early first receipt, repeat correction idempotent, direct and credit flows, no doubled card expense/payment")
 
-    # Actual UI calendar, confirmed payment, undo, year isolation and persistence.
-    page.clock.install(time=datetime(2026, 10, 11, 15))
-    page.evaluate("renderDue()")
-    assert page.locator("#due-message").inner_text() == "Vencimento há 6 dias"
-    records_before = page.evaluate("JSON.stringify(state.invoices)")
-    interval_before = page.locator("#due-interval").inner_text()
+    receive(page, "second", "700,00", "2026-10-10")
+    assert finance(page)["incomeReceived"] == 167000
+    assert finance(page)["available"] == 120000
+    receive(page, "first", "900,00", "2026-10-03", correct=True)
+    f = finance(page)
+    assert f["incomeReceived"] == 170000 and f["available"] == 123000 and f["projected"] == 138000
+    assert page.evaluate('salaryFor().first.expectedCents') == 86600
+    assert page.locator(".quarter-plan").first.get_by_text("Sobram R$\xa0430,00", exact=True).count() == 1
+    assert page.locator(".timing-warning").count() >= 1
+    commitments = page.evaluate("monthCommitments()")
+    assert len(commitments) == 3 and len([x for x in commitments if x["id"] == "invoice"]) == 1
+    assert sum(x["cents"] for x in commitments) == 52000
+    pending = page.locator('#quarter-plans select[data-commitment]').last
+    pending.select_option("first")
+    assert page.locator(".quarter-plan").first.get_by_text("Sobram R$\xa0380,00", exact=True).count() == 1
+    view(page)
+    page.locator("#invoice-funding").select_option("balance")
+    view(page, "salary")
+    assert page.locator('#balance-commitments select[data-commitment="invoice"]').count() == 1
+    assert "Disponível no mês" in page.locator("#balance-plan-note").inner_text()
+    print("PASS: second early receipt, correction, per-quarter budgets/dates, invoice is one commitment, balance funding")
+
+    pay(page, "200,00", edit=True)
+    f = finance(page)
+    assert f["expensePaid"] == 22000 and f["expensePending"] == 30000
+    assert f["available"] == 148000 and f["projected"] == 138000
+    assert f["spending"] == 52000
+    assert page.locator("#due-message").inner_text() == "Pagamento parcial"
+    pay(page, "450,00", edit=True)
+    add(page, "Nova compra após pagamento", "10,00", category="shopping")
+    assert finance(page)["invoice"] == 46000
+    assert finance(page)["invoicePaid"] == 45000
+    assert finance(page)["invoiceRemaining"] == 1000
+    assert finance(page)["available"] == 123000 and finance(page)["projected"] == 137000
+    assert page.locator("#due-message").inner_text() == "Pagamento parcial"
+    pay(page, "460,00", edit=True)
+    assert finance(page)["expensePaid"] == 48000 and finance(page)["available"] == 122000
+    assert finance(page)["spending"] == 53000
     page.locator("#toggle-payment").click()
-    assert page.locator("#due-message").inner_text() == "Fatura paga"
-    assert page.locator("#due-message").get_attribute("data-status") == "paid"
-    assert page.locator("#due-progress").get_attribute("aria-valuenow") == "100"
-    assert page.locator("#due-progress").get_attribute("data-status") == "paid"
-    assert page.locator("#due-interval").inner_text() == interval_before
-    assert page.locator("#due-date").inner_text() == "05/10/2026"
-    assert page.evaluate("JSON.stringify(state.invoices)") == records_before
-    page.locator("#sum-none").click()
-    assert custom_total(page) == 0 and total(page) == 3461
-    assert page.locator("#due-message").inner_text() == "Fatura paga"
+    page.locator("#confirm-ok").click()
+    assert finance(page)["expensePaid"] == 2000 and finance(page)["available"] == 168000
+    assert finance(page)["projected"] == 137000
+    pay(page, "460,00")
     page.reload()
+    assert finance(page)["available"] == 122000
     assert page.locator("#due-message").inner_text() == "Fatura paga"
+    print("PASS: paid value snapshot, partial payment/residual, correction/undo, new purchases do not silently rewrite paid cash")
+
+    old_salary = page.evaluate("salaryFor()")
     period(page, 11)
-    assert page.locator("#due-message").inner_text() != "Fatura paga"
+    assert finance(page)["invoice"] == finance(page)["incomeReceived"] == finance(page)["available"] == 0
+    assert finance(page)["incomeExpected"] == 161600
+    view(page, "salary")
+    page.locator("#salary-gross").fill("1900,00")
+    page.locator("#salary-first").fill("1000,00")
+    page.locator("#salary-first-day").fill("20")
+    page.locator("#salary-second").fill("800,00")
+    page.locator("#salary-second-day").fill("3")
+    page.get_by_role("button", name="Salvar configuração de salário", exact=True).click()
+    assert page.locator(".receipt-heading h3").first.inner_text() == "Segunda quinzena"
+    receive(page, "first", "1010,00", "2026-11-18")
+    assert finance(page)["incomeReceived"] == 101000
+    period(page, 10)
+    assert page.evaluate("salaryFor()") == old_salary
+    assert finance(page)["available"] == 122000
+    assert page.evaluate('state.payments[state.period]') is True
     period(page, 10, 2027)
-    assert page.locator("#due-message").inner_text() != "Fatura paga"
-    period(page, 10)
-    assert page.locator("#due-message").inner_text() == "Fatura paga"
-    page.get_by_role("button", name="Marcar como não paga", exact=True).click()
-    assert page.locator("#due-message").inner_text() == "Vencimento há 6 dias"
-    page.clock.set_system_time(datetime(2026, 10, 1, 15))
-    page.evaluate("renderDue()")
-    expected_progress = page.locator("#due-progress").get_attribute("aria-valuenow")
-    assert page.locator("#due-message").inner_text() == "Faltam 4 dias"
-    page.locator("#toggle-payment").click()
-    page.locator("#toggle-payment").click()
-    assert page.locator("#due-message").inner_text() == "Faltam 4 dias"
-    assert page.locator("#due-progress").get_attribute("aria-valuenow") == expected_progress
-    page.clock.set_system_time(datetime(2026, 10, 5, 15))
-    page.evaluate("renderDue()")
-    assert page.locator("#due-message").inner_text() == "Vence hoje"
-    page.locator("#toggle-payment").click()
-    add(page, "Registro após pagamento", "0,10")
-    assert page.locator("#due-message").inner_text() == "Fatura paga"
-    print("PASS: payment/undo before, on and after due date; independent months/years, unchanged values and reload persistence")
-
-    # Inline options, duplicates, renames, transfers; queries/payment stay intact.
-    page.locator("#sum-categories").click()
-    page.locator("#add-record").click()
-    page.locator("#description").fill("Categoria no formulário")
-    page.locator("#value").fill("7,70")
-    transport = create(page, "Transporte", inline=True)
-    assert page.locator("#group").input_value() == transport
-    assert page.locator("#description").input_value() == "Categoria no formulário"
-    label = create(page, "Etiqueta teste", kind="label", inline=True)
-    assert page.locator("#record-label").input_value() == label
-    page.get_by_role("button", name="Salvar lançamento", exact=True).click()
-    assert total(page) == 4241
-    assert "Transporte" in page.locator("#combined-label").inner_text()
-    assert custom_total(page) == 4241
-    page.locator("#sum-none").click()
-    page.locator('[data-sum-category="fixed"]').check()
-    page.locator(f'[data-sum-category="{transport}"]').check()
-    assert custom_total(page) == 1891 and total(page) == 4241
-    assert page.locator("#custom-expression").inner_text() == "Fixos + Transporte"
-    rename(page, "Transporte", "Mobilidade")
-    assert page.locator("#custom-expression").inner_text() == "Fixos + Mobilidade"
-    assert "Mobilidade" in page.locator("#combined-label").inner_text()
-    page.locator("#manage-add-category").click()
-    page.locator("#option-name").fill("  mObILiDaDe  ")
-    page.get_by_role("button", name="Salvar opção", exact=True).click()
-    assert "Já existe" in page.locator("#option-error").inner_text()
-    page.locator("#option-cancel").click()
-    rename(page, "Etiqueta teste", "Etiqueta renomeada", kind="etiqueta")
-    page.locator("#label-filter").select_option(label)
-    assert page.locator("#records tr").count() == 1
-    delete(page, "Etiqueta renomeada", kind="etiqueta")
-    delete(page, "Mobilidade", target="flexible")
-    assert total(page) == 4241
-    assert "Mobilidade" not in page.locator("#combined-label").inner_text()
-    assert custom_total(page) == 1121
-    assert page.locator("#due-message").inner_text() == "Fatura paga"
-    delete(page, "Moisés")
-    page.locator("#sum-all").click()
-    assert custom_total(page) == total(page)
-    assert page.evaluate("currentRecords().filter(x=>x.categoryId===null).length") == 2
-    print("PASS: dynamic options/composition/query after creation, rename/deletion, transfer, duplicate validation, labels and unchanged payment")
-
-    # Calendar edge cases remain valid.
-    cases = [("2026-02", 31, [2026, 1, 20], 8), ("2028-02", 31, [2028, 1, 29], 0), ("2027-01", 5, [2026, 11, 31], 5)]
-    for invoice_period, day, date, remaining in cases:
-        result = page.evaluate("([p,d,t])=>{const r=DueCalendar.calculate(p,d,new Date(...t));return {remaining:r.remaining,progress:r.progress}}", [invoice_period, day, date])
-        assert result["remaining"] == remaining and 0 <= result["progress"] <= 100
-    page.locator("#due-day").fill("31")
-    page.get_by_role("button", name="Salvar vencimento", exact=True).click()
-    period(page, 2)
-    assert page.locator("#due-date").inner_text() == "28/02/2026"
-    assert total(page) == 0 and custom_total(page) == 0
-    period(page, 10)
-    assert page.locator("#due-message").inner_text() == "Fatura paga"
-    page.reload()
-    assert page.locator("#due-day").input_value() == "31" and total(page) == 4241
-
-    # Mobile and many categories; panel result is below its options.
-    for index in range(6):
-        create(page, f"Categoria extra de teste {index}")
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.locator("#sum-categories").click()
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    assert page.locator(".custom-result").bounding_box()["y"] >= page.locator(".sum-fieldset").bounding_box()["y"] + page.locator(".sum-fieldset").bounding_box()["height"]
-    page.locator("#sum-none").click()
-    assert custom_total(page) == 0
-    page.locator("#sum-all").click()
-    assert custom_total(page) == total(page)
-    page.locator("#add-record").click()
-    page.keyboard.press("Escape")
-    assert not page.locator("#record-dialog").is_visible()
-    page.locator("#toggle-payment").click()
-    assert page.locator("#due-message").inner_text() != "Fatura paga"
-    page.locator("#toggle-payment").click()
-    page.reload()
-    assert page.locator("#due-message").inner_text() == "Fatura paga"
-    print("PASS: calendar edges, configurable due day, mobile with many categories, result below selection and mobile payment persistence")
-
-    # Migrate v2 preserving every month, names, labels, preferences and records exactly.
-    saved = page.evaluate("JSON.parse(JSON.stringify(state))")
-    previous = {key: value for key, value in saved.items() if key != "payments"}
-    previous["version"] = 2
-    previous["labels"].append({"id": "label-saved-test", "name": "Etiqueta salva de teste"})
-    previous["invoices"]["2026-11"] = [{"id": "saved-other-month", "description": "Registro fictício de outro mês", "categoryId": None, "labelId": "label-saved-test", "cents": 500}]
-    page.evaluate("data=>{localStorage.removeItem('v3go.invoice.v3');localStorage.setItem('v3go.invoice.v2',JSON.stringify(data))}", previous)
-    page.reload()
-    assert page.evaluate("state.invoices") == previous["invoices"]
-    assert page.evaluate("state.categories") == previous["categories"]
-    assert page.evaluate("state.labels") == previous["labels"]
-    assert page.evaluate("state.period") == previous["period"]
-    assert page.evaluate("state.dueDay") == previous["dueDay"]
-    assert total(page) == 4241 and page.locator("#due-message").inner_text() != "Fatura paga"
-    assert json.loads(page.evaluate("localStorage.getItem('v3go.invoice.v2')")) == previous
-    page.reload()
-    assert total(page) == 4241
+    assert finance(page)["incomeReceived"] == 0 and finance(page)["incomeExpected"] == 180000
+    assert not page.evaluate('state.payments[state.period] === true')
     period(page, 11)
-    assert total(page) == 500
-    assert page.locator("#records").get_by_text("Etiqueta salva de teste", exact=True).count() == 1
+    view(page, "salary")
+    page.get_by_role("button", name="Desfazer recebimento: Primeira quinzena", exact=True).click()
+    page.locator("#confirm-ok").click()
+    assert finance(page)["incomeReceived"] == 0 and finance(page)["incomeExpected"] == 180000
     period(page, 10)
-    assert total(page) == 4241
-    # Single-list v1 migration keeps original edits in their established October mapping.
-    legacy = {"version": 1, "period": "2027-02", "records": [{"id": "test-v1", "description": "Registro fictício legado", "group": "flexible", "cents": 12345}]}
-    page.evaluate("data=>{localStorage.removeItem('v3go.invoice.v3');localStorage.removeItem('v3go.invoice.v2');localStorage.setItem('v3go.invoice.v1',JSON.stringify(data))}", legacy)
+    assert finance(page)["incomeReceived"] == 170000
+    print("PASS: defaults editable, chronological ordering, confirmed past snapshots preserved, month/year isolation and undo")
+
+    view(page)
+    page.locator("#card-upload").set_input_files({"name": "bad.txt", "mimeType": "text/plain", "buffer": b"invalid"})
+    assert page.locator("#card-image-error").is_visible()
+    # A tiny valid PNG fixture produced by canvas, with no external dependency.
+    png = page.evaluate("()=>{const c=document.createElement('canvas');c.width=400;c.height=250;const x=c.getContext('2d');x.fillStyle='#426b80';x.fillRect(0,0,400,250);return c.toDataURL('image/png').split(',')[1]}")
+    import base64
+    page.locator("#card-upload").set_input_files({"name": "custom.png", "mimeType": "image/png", "buffer": base64.b64decode(png)})
+    page.wait_for_function("state.cardImage !== null")
+    custom_image = page.evaluate("state.cardImage")
+    assert custom_image.startswith("data:image/jpeg;base64,")
+    assert page.locator("#credit-card").evaluate("e=>getComputedStyle(e).backgroundSize") == "cover"
     page.reload()
-    assert page.evaluate("state.period") == "2026-10" and total(page) == 12345
-    period(page, 2, 2027)
-    assert total(page) == 0
-    period(page, 10)
-    page.locator("#clear-data").click()
-    page.locator("#confirm-cancel").click()
-    assert total(page) == 12345
+    assert page.evaluate("state.cardImage") == custom_image
+    assert finance(page)["available"] == 122000
+    page.locator("#restore-card").click()
+    assert page.evaluate("state.cardImage") is None
+    page.reload()
+    assert page.locator("#credit-card").evaluate("e=>getComputedStyle(e).backgroundImage.startsWith('url(\"data:image/jpeg;base64,')")
+    assert page.evaluate("state.cardImage") is None
+    print("PASS: image MIME validation, cover without stretching, upload/restore persistence and unchanged financial data")
+
+    page.locator("#type-filter").select_option("income")
+    assert page.locator("#records tr").count() == 2
+    page.locator("#type-filter").select_option("credit")
+    assert page.locator("#records tr").count() == 3
+    page.locator("#type-filter").select_option("all")
+    page.locator("#add-record").click()
+    page.locator("#description").fill("Categoria criada durante lançamento")
+    page.locator("#value").fill("0,10")
+    extra = create_category(page, "Categoria adicional", inline=True)
+    assert page.locator("#group").input_value() == extra
+    page.get_by_role("button", name="Salvar lançamento", exact=True).click()
+    assert finance(page)["invoice"] == 46010
+    page.get_by_role("button", name="Renomear categoria Categoria adicional", exact=True).click()
+    page.locator("#option-name").fill("Categoria renomeada")
+    page.get_by_role("button", name="Salvar opção", exact=True).click()
+    assert "Categoria renomeada" in page.locator("#combined-label").inner_text()
+    page.get_by_role("button", name="Excluir categoria Categoria renomeada", exact=True).click()
+    page.locator("#transfer-option").select_option("")
+    page.locator("#confirm-ok").click()
+    assert finance(page)["invoice"] == 46010
+    assert "Sem categoria" in page.locator("#combined-label").inner_text()
+    page.locator("#sum-categories").click()
+    page.locator("#sum-none").click()
+    page.locator('[data-sum-category="uncategorized"]').check()
+    assert page.evaluate("InvoiceMath.selectedTotal(creditRecords(),customSelection)") == 10
+    print("PASS: transaction type filters, inline category, rename/unassignment, personalized query only credit purchases")
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    card = page.locator("#credit-card").bounding_box()
+    assert abs(card["width"] / card["height"] - 1.586) < .02
+    assert page.locator(".custom-result").bounding_box()["y"] >= page.locator(".sum-fieldset").bounding_box()["y"] + page.locator(".sum-fieldset").bounding_box()["height"]
+    view(page, "salary")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.get_by_role("button", name="Corrigir recebimento: Segunda quinzena", exact=True).click()
+    assert page.locator("#receipt-dialog").is_visible()
+    page.keyboard.press("Escape")
+    page.locator("#tab-salary").focus()
+    page.keyboard.press("ArrowLeft")
+    assert page.locator("#monthly-view").is_visible()
+    print("PASS: desktop/mobile layouts, card aspect ratio, query placement, dialogs and keyboard tab navigation")
+
+    # Oversubscribed allocation and nonduplicating card commitment.
+    add(page, "Compromisso acima da quinzena", "1000,00", method="pix", funding="first")
+    view(page, "salary")
+    assert page.locator(".quarter-plan.over-budget").count() >= 1
+    assert page.locator("#quarter-plans").get_by_text("Os compromissos ultrapassam o recebimento previsto.", exact=True).count() >= 1
+    view(page)
+    page.get_by_role("button", name="Excluir Compromisso acima da quinzena", exact=True).click()
+    page.locator("#confirm-ok").click()
+    assert finance(page)["invoice"] == 46010
+    print("PASS: over-budget commitments flagged and record deletion preserves invoice")
+
+    # Legacy v3/v2/v1 bases retain values, identity, categories and months; old records become card purchases.
+    original = {"version": 3, "period": "2026-10", "dueDay": 5, "categories": [{"id": "fixed", "name": "Contas fixas renomeadas", "color": "#8865c3"}, {"id": "user-transport", "name": "Transporte", "color": "#738bc6"}], "labels": [{"id": "tag", "name": "Etiqueta salva"}], "invoices": {"2026-10": [{"id": "old", "description": "Registro legado de teste", "categoryId": "fixed", "labelId": "tag", "cents": 65221}], "2026-11": [{"id": "old-other", "description": "Outro período", "categoryId": None, "labelId": None, "cents": 500}]}, "payments": {"2026-10": True}}
+    page.evaluate("data=>{localStorage.removeItem('v3go.invoice.v4');localStorage.setItem('v3go.invoice.v3',JSON.stringify(data))}", original)
+    page.reload()
+    assert finance(page)["invoice"] == finance(page)["spending"] == finance(page)["expensePaid"] == 65221
+    assert page.evaluate("currentRecords()[0].date") is None
+    assert page.evaluate("currentRecords()[0].paymentMethod") == "credit"
+    assert page.evaluate("state.settlements[state.period].date") is None
+    assert page.evaluate("state.categories.filter(x=>x.name==='Transporte').length") == 1
+    assert page.evaluate("state.categories.find(x=>x.id==='fixed').name") == "Contas fixas renomeadas"
+    assert json.loads(page.evaluate("localStorage.getItem('v3go.invoice.v3')")) == original
+    period(page, 11)
+    assert finance(page)["invoice"] == 500 and finance(page)["expensePaid"] == 0
+    assert finance(page)["incomeReceived"] == 0
+    for version in (2, 1):
+        old = dict(original, version=2) if version == 2 else {"version": 1, "period": "2027-01", "records": [{"id": "v1", "description": "Teste de migração v1", "group": "fixed", "cents": 321}]}
+        page.evaluate("([version,data])=>{for(const key of ['v4','v3','v2','v1'])localStorage.removeItem('v3go.invoice.'+key);localStorage.setItem('v3go.invoice.v'+version,JSON.stringify(data))}", [version, old])
+        page.reload()
+        assert finance(page)["invoice"] == (65221 if version == 2 else 321)
     page.locator("#clear-data").click()
     page.locator("#confirm-ok").click()
     page.reload()
-    assert total(page) == 0  # Does not reimport retained legacy backups.
-    page.evaluate("localStorage.setItem('v3go.invoice.v3', 'bad-json')")
+    assert finance(page)["invoice"] == finance(page)["incomeReceived"] == 0
+    page.evaluate("localStorage.setItem('v3go.invoice.v4','bad-json')")
     page.reload()
     assert page.locator("#storage-warning").is_visible()
-    assert page.evaluate("localStorage.getItem('v3go.invoice.v3')") == "bad-json"
-    assert total(page) == 0
+    assert page.evaluate("localStorage.getItem('v3go.invoice.v4')") == "bad-json"
     page.locator("#clear-data").click()
     page.locator("#confirm-ok").click()
     assert not page.locator("#storage-warning").is_visible()
+    assert finance(page)["available"] == 0
     assert not errors, errors
-    print("PASS: v2/v1 migrations preserve saved data, backups intact, explicit clear, corrupt data protected, no runtime errors")
+    print("PASS: all legacy migrations, missing dates explicit, paid invoice counted once, categories deduplicated, corrupt storage protected")
     browser.close()

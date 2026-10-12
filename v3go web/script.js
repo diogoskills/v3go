@@ -35,14 +35,21 @@ const InvoiceMath = Object.freeze({
 });
 
 const $ = id => document.getElementById(id);
-const STORAGE_KEY = "v3go.invoice.v3";
-const PREVIOUS_KEY = "v3go.invoice.v2";
-const LEGACY_KEY = "v3go.invoice.v1";
+const STORAGE_KEY = "v3go.invoice.v4";
+const PREVIOUS_KEYS = ["v3go.invoice.v3", "v3go.invoice.v2", "v3go.invoice.v1"];
 const BASE_PERIOD = "2026-10";
 const DEFAULT_CATEGORIES = [
   { id: "fixed", name: "Fixos", color: "#8865c3" },
   { id: "flexible", name: "Flexíveis", color: "#66a595" },
-  { id: "moises", name: "Moisés", color: "#d7a669" }
+  { id: "moises", name: "Moisés", color: "#d7a669" },
+  { id: "food", name: "Alimentação", color: "#c67d98" },
+  { id: "transport", name: "Transporte", color: "#738bc6" },
+  { id: "housing", name: "Moradia", color: "#81945e" },
+  { id: "health", name: "Saúde", color: "#66a595" },
+  { id: "education", name: "Educação", color: "#8865c3" },
+  { id: "leisure", name: "Lazer", color: "#d7a669" },
+  { id: "shopping", name: "Compras", color: "#c67d98" },
+  { id: "other", name: "Outros", color: "#738bc6" }
 ];
 const PALETTE = ["#8865c3", "#66a595", "#d7a669", "#738bc6", "#c67d98", "#81945e"];
 const MONTHS = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
@@ -59,8 +66,7 @@ const normalizeName = name => name.trim().replace(/\s+/g, " ");
 const compareName = name => normalizeName(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
 const validPeriod = period => typeof period === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(period) && Number(period.slice(0, 4)) >= 1;
 const newId = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const importRecord = record => ({ id: record.id, description: record.description, categoryId: record.group, labelId: null, cents: record.cents });
-const emptyState = () => ({ version: 3, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {} });
+const emptyState = () => ({ version: 4, period: BASE_PERIOD, dueDay: 5, categories: DEFAULT_CATEGORIES.map(category => ({ ...category })), labels: [], invoices: {}, payments: {}, settlements: {}, invoiceFunding: {}, salaryDefaults: JSON.parse(JSON.stringify(DEFAULT_SALARY)), salaryMonths: {}, cardImage: null });
 
 // Datas locais: diferenças de dias civis evitam erros de horário de verão.
 const DueCalendar = Object.freeze({
@@ -106,8 +112,82 @@ function validateOptions(options, type) {
     return type === "categories" ? { id: option.id, name: normalizeName(option.name), color: option.color } : { id: option.id, name: normalizeName(option.name) };
   });
 }
+const DEFAULT_SALARY = { grossCents: 177200, first: { cents: 86600, day: 5 }, second: { cents: 75000, day: 15 } };
+const METHODS = { credit: "Cartão de crédito", pix: "Pix", debit: "Débito", cash: "Dinheiro", transfer: "Transferência", other: "Outro" };
+const FUNDINGS = { first: "Primeira quinzena", second: "Segunda quinzena", balance: "Saldo disponível" };
+const validDate = value => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!validPeriod(value.slice(0, 7)) || day < 1 || day > 31) return false;
+  const date = DueCalendar.date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+};
+const localDateString = date => `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const todayDate = () => localDateString(new Date());
+const defaultRecordDate = period => todayDate().startsWith(period) ? todayDate() : `${period}-01`;
+function displayDate(value) {
+  if (!value) return "Não informada";
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
+}
+const creditRecords = (records = currentRecords()) => records.filter(record => record.type === "expense" && record.paymentMethod === "credit");
+function salarySnapshot(defaults) {
+  return { grossCents: defaults.grossCents, ...Object.fromEntries(["first", "second"].map(id => [id, { expectedCents: defaults[id].cents, day: defaults[id].day, received: false, actualCents: null, actualDate: null }])) };
+}
+function salaryFor(period = state.period) { return state.salaryMonths[period] ?? salarySnapshot(state.salaryDefaults); }
+function receiptDate(period, receipt) {
+  const [year, month] = period.split("-").map(Number);
+  return localDateString(DueCalendar.date(year, month - 1, receipt.day));
+}
+const FinanceMath = Object.freeze({
+  safe(value) { if (!Number.isSafeInteger(value)) throw new Error("O resultado excede o limite de cálculo preciso."); return value; },
+  calculate(records, salary, settlement = null) {
+    const incomes = records.filter(record => record.type === "income");
+    const expenses = records.filter(record => record.type === "expense");
+    const credit = expenses.filter(record => record.paymentMethod === "credit");
+    const direct = expenses.filter(record => record.paymentMethod !== "credit");
+    const salaryReceived = InvoiceMath.sum([salary.first, salary.second].filter(receipt => receipt.received).map(receipt => ({ cents: receipt.actualCents })));
+    const salaryExpected = InvoiceMath.sum([salary.first, salary.second].filter(receipt => !receipt.received).map(receipt => ({ cents: receipt.expectedCents })));
+    const incomeReceived = this.safe(InvoiceMath.sum(incomes.filter(record => record.status === "received")) + salaryReceived);
+    const incomeExpected = this.safe(InvoiceMath.sum(incomes.filter(record => record.status === "expected")) + salaryExpected);
+    const invoice = InvoiceMath.sum(credit);
+    const invoicePaid = settlement?.cents ?? 0;
+    const invoiceRemaining = settlement ? Math.max(this.safe(invoice - invoicePaid), 0) : invoice;
+    const expensePaid = this.safe(InvoiceMath.sum(direct.filter(record => record.status === "paid")) + invoicePaid);
+    const expensePending = this.safe(InvoiceMath.sum(direct.filter(record => record.status === "pending")) + invoiceRemaining);
+    return { invoice, invoicePaid, invoiceRemaining, incomeReceived, incomeExpected, expensePaid, expensePending, spending: InvoiceMath.sum(expenses), available: this.safe(incomeReceived - expensePaid), projected: this.safe(this.safe(incomeReceived + incomeExpected) - this.safe(expensePaid + expensePending)) };
+  }
+});
+function financeFor(period = state.period, data = state) {
+  const salary = data.salaryMonths[period] ?? salarySnapshot(data.salaryDefaults);
+  return FinanceMath.calculate(data.invoices[period] ?? [], salary, data.payments[period] ? data.settlements[period] : null);
+}
+function validateSalaryDefaults(data) {
+  if (!data || !Number.isSafeInteger(data.grossCents) || data.grossCents < 0) throw new Error("Salário bruto inválido.");
+  const result = { grossCents: data.grossCents };
+  for (const id of ["first", "second"]) {
+    const receipt = data[id];
+    if (!receipt || !Number.isSafeInteger(receipt.cents) || receipt.cents < 0 || !Number.isInteger(receipt.day) || receipt.day < 1 || receipt.day > 31) throw new Error("Configuração de quinzena inválida.");
+    result[id] = { cents: receipt.cents, day: receipt.day };
+  }
+  FinanceMath.safe(result.first.cents + result.second.cents);
+  return result;
+}
+function validateSalaryMonth(data) {
+  if (!data || !Number.isSafeInteger(data.grossCents) || data.grossCents < 0) throw new Error("Salário do mês inválido.");
+  const result = { grossCents: data.grossCents };
+  for (const id of ["first", "second"]) {
+    const receipt = data[id];
+    if (!receipt || !Number.isSafeInteger(receipt.expectedCents) || receipt.expectedCents < 0 || !Number.isInteger(receipt.day) || receipt.day < 1 || receipt.day > 31 || typeof receipt.received !== "boolean" ||
+        (receipt.received && (!Number.isSafeInteger(receipt.actualCents) || receipt.actualCents < 0 || !validDate(receipt.actualDate))) ||
+        (!receipt.received && (receipt.actualCents !== null || receipt.actualDate !== null))) throw new Error("Recebimento de quinzena inválido.");
+    result[id] = { expectedCents: receipt.expectedCents, day: receipt.day, received: receipt.received, actualCents: receipt.actualCents, actualDate: receipt.actualDate };
+  }
+  FinanceMath.safe(result.first.expectedCents + result.second.expectedCents);
+  return result;
+}
 function validateState(data) {
-  if (!data || data.version !== 3 || !validPeriod(data.period) || !Number.isInteger(data.dueDay) || data.dueDay < 1 || data.dueDay > 31 ||
+  if (!data || data.version !== 4 || !validPeriod(data.period) || !Number.isInteger(data.dueDay) || data.dueDay < 1 || data.dueDay > 31 ||
       !data.invoices || typeof data.invoices !== "object" || Array.isArray(data.invoices)) throw new Error("Dados salvos inválidos.");
   const categories = validateOptions(data.categories, "categories");
   const labels = validateOptions(data.labels, "labels");
@@ -116,34 +196,79 @@ function validateState(data) {
     if (!validPeriod(period) || !Array.isArray(records)) throw new Error("Período inválido.");
     const ids = new Set();
     invoices[period] = records.map(record => {
+      const income = record?.type === "income";
       if (!record || typeof record.id !== "string" || !record.id || ids.has(record.id) ||
           typeof record.description !== "string" || !record.description.trim() || record.description.length > 200 ||
           (record.categoryId !== null && !categories.some(category => category.id === record.categoryId)) ||
           (record.labelId !== null && !labels.some(label => label.id === record.labelId)) ||
-          (record.cents !== null && !Number.isSafeInteger(record.cents))) throw new Error("Lançamento inválido.");
+          (record.cents !== null && !Number.isSafeInteger(record.cents)) || !["income", "expense"].includes(record.type) ||
+          (record.date !== null && !validDate(record.date)) || !(income ? ["expected", "received"] : ["pending", "paid"]).includes(record.status) ||
+          (income ? record.paymentMethod !== null : !Object.hasOwn(METHODS, record.paymentMethod)) ||
+          (record.funding !== null && !Object.hasOwn(FUNDINGS, record.funding)) || (income && record.funding !== null)) throw new Error("Lançamento inválido.");
       ids.add(record.id);
-      return { id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents };
+      return { id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: record.type, date: record.date, status: record.status, paymentMethod: record.paymentMethod, funding: record.funding };
     });
-    InvoiceMath.calculate(invoices[period], categories);
+    InvoiceMath.calculate(creditRecords(invoices[period]), categories);
   }
-  if (!data.payments || typeof data.payments !== "object" || Array.isArray(data.payments)) throw new Error("Status de pagamento inválidos.");
-  const payments = {};
+  for (const field of ["payments", "settlements", "invoiceFunding", "salaryMonths"]) if (!data[field] || typeof data[field] !== "object" || Array.isArray(data[field])) throw new Error("Configuração mensal inválida.");
+  const payments = {}, settlements = {}, invoiceFunding = {}, salaryMonths = {};
   for (const [period, paid] of Object.entries(data.payments)) {
-    if (!validPeriod(period) || typeof paid !== "boolean") throw new Error("Status de pagamento inválido.");
+    if (!validPeriod(period) || typeof paid !== "boolean") throw new Error("Pagamento inválido.");
     payments[period] = paid;
   }
-  return { version: 3, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments };
+  for (const [period, payment] of Object.entries(data.settlements)) {
+    if (!validPeriod(period) || !payments[period] || !payment || !Number.isSafeInteger(payment.cents) || (payment.date !== null && !validDate(payment.date))) throw new Error("Pagamento da fatura inválido.");
+    settlements[period] = { cents: payment.cents, date: payment.date };
+  }
+  for (const [period, paid] of Object.entries(payments)) if (paid && !settlements[period]) throw new Error("Fatura paga sem registro do valor.");
+  for (const [period, funding] of Object.entries(data.invoiceFunding)) {
+    if (!validPeriod(period) || (funding !== null && !Object.hasOwn(FUNDINGS, funding))) throw new Error("Vínculo da fatura inválido.");
+    invoiceFunding[period] = funding;
+  }
+  const salaryDefaults = validateSalaryDefaults(data.salaryDefaults);
+  for (const [period, salary] of Object.entries(data.salaryMonths)) {
+    if (!validPeriod(period)) throw new Error("Período salarial inválido.");
+    salaryMonths[period] = validateSalaryMonth(salary);
+  }
+  if (data.cardImage !== null && (typeof data.cardImage !== "string" || data.cardImage.length > 1500000 || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(data.cardImage))) throw new Error("Imagem salva inválida.");
+  const result = { version: 4, period: data.period, dueDay: data.dueDay, categories, labels, invoices, payments, settlements, invoiceFunding, salaryDefaults, salaryMonths, cardImage: data.cardImage };
+  for (const period of new Set([data.period, ...Object.keys(invoices), ...Object.keys(salaryMonths), ...Object.keys(settlements)])) financeFor(period, result);
+  return result;
 }
-function migrateLegacy(data) {
-  if (!data || data.version !== 1 || !validPeriod(data.period) || !Array.isArray(data.records)) throw new Error("Base antiga inválida.");
+function completeCategories(categories) {
+  const result = categories.map(category => ({ ...category }));
+  for (const category of DEFAULT_CATEGORIES) if (!result.some(item => item.id === category.id || compareName(item.name) === compareName(category.name))) result.push({ ...category });
+  return result;
+}
+function migratePrevious(data) {
+  if (!data || ![1, 2, 3].includes(data.version)) throw new Error("Versão anterior inválida.");
   const migrated = emptyState();
-  // A versão anterior tinha só uma lista compartilhada, não históricos mensais.
-  migrated.invoices[BASE_PERIOD] = data.records.map(record => {
-    if (!record || !DEFAULT_CATEGORIES.some(category => category.id === record.group)) throw new Error("Categoria antiga inválida.");
-    return importRecord(record);
-  });
+  if (data.version === 1) {
+    if (!validPeriod(data.period) || !Array.isArray(data.records)) throw new Error("Base antiga inválida.");
+    migrated.invoices[BASE_PERIOD] = data.records.map(record => {
+      if (!record || !["fixed", "flexible", "moises"].includes(record.group)) throw new Error("Categoria antiga inválida.");
+      return { ...record, categoryId: record.group, labelId: null };
+    });
+  } else {
+    migrated.period = data.period;
+    migrated.dueDay = data.dueDay;
+    migrated.categories = completeCategories(validateOptions(data.categories, "categories"));
+    migrated.labels = data.labels;
+    migrated.invoices = data.invoices;
+    migrated.payments = data.version === 3 ? data.payments : {};
+  }
+  if (!migrated.invoices || typeof migrated.invoices !== "object" || Array.isArray(migrated.invoices)) throw new Error("Base mensal inválida.");
+  const mapped = {};
+  for (const [period, records] of Object.entries(migrated.invoices)) {
+    if (!Array.isArray(records)) throw new Error("Lançamentos anteriores inválidos.");
+    mapped[period] = records.map(record => ({ id: record.id, description: record.description, categoryId: record.categoryId, labelId: record.labelId, cents: record.cents, type: "expense", date: null, status: "pending", paymentMethod: "credit", funding: null }));
+  }
+  migrated.invoices = mapped;
+  if (!migrated.payments || typeof migrated.payments !== "object" || Array.isArray(migrated.payments)) throw new Error("Pagamentos anteriores inválidos.");
+  for (const [period, paid] of Object.entries(migrated.payments)) if (paid === true) migrated.settlements[period] = { cents: InvoiceMath.sum(mapped[period] ?? []), date: null };
   return validateState(migrated);
 }
+
 let storageBlocked = false;
 let migrationApplied = false;
 function storageWarning(message) {
@@ -155,19 +280,13 @@ function loadState() {
   try {
     const current = localStorage.getItem(STORAGE_KEY);
     if (current !== null) return validateState(JSON.parse(current));
-    const previous = localStorage.getItem(PREVIOUS_KEY);
-    if (previous !== null) {
-      const data = JSON.parse(previous);
-      if (!data || data.version !== 2) throw new Error("Base anterior inválida.");
-      const migrated = validateState({ ...data, version: 3, payments: data.payments ?? {} });
-      migrationApplied = true;
-      return migrated;
-    }
-    const legacy = localStorage.getItem(LEGACY_KEY);
-    if (legacy !== null) {
-      const migrated = migrateLegacy(JSON.parse(legacy));
-      migrationApplied = true;
-      return migrated;
+    for (const key of PREVIOUS_KEYS) {
+      const previous = localStorage.getItem(key);
+      if (previous !== null) {
+        const migrated = migratePrevious(JSON.parse(previous));
+        migrationApplied = true;
+        return migrated;
+      }
     }
     return emptyState();
   } catch (error) {
@@ -181,6 +300,9 @@ let selectedCategory = "all";
 let selectedLabel = "all";
 let editingId = null;
 let editingPeriod = null;
+let receiptEditing = null;
+let settlementPeriod = null;
+let currentView = "monthly";
 let optionEditor = null;
 let confirmationAction = null;
 let toastTimer;
@@ -216,6 +338,7 @@ function resetFilters() {
   selectedCategory = "all";
   selectedLabel = "all";
   $("search").value = "";
+  $("type-filter").value = "all";
 }
 function selectOptions(element, options, emptyLabel, selected = "", includeAll = false) {
   element.replaceChildren();
@@ -254,8 +377,19 @@ function renderRow(record) {
   badge.style.setProperty("--category-color", categoryColor(record.categoryId));
   badge.textContent = optionName("categories", record.categoryId);
   category.append(badge);
+  const type = makeCell(record.type === "income" ? "Entrada" : "Saída", `type-cell ${record.type}`);
+  const date = document.createElement("small");
+  date.textContent = displayDate(record.date);
+  type.append(date);
+  const statusText = record.status === "received" ? "Recebida" : record.status === "expected" ? "Prevista" : record.status === "paid" ? "Paga" : "Pendente";
+  const status = makeCell(statusText, `status-cell ${record.status}`);
+  if (record.paymentMethod) {
+    const method = document.createElement("small");
+    method.textContent = METHODS[record.paymentMethod];
+    status.append(method);
+  }
   const label = makeCell(optionName("labels", record.labelId), "label-cell");
-  row.append(description, category, label, makeCell(record.cents === null ? "Sem valor" : currency(record.cents), record.cents === null ? "numeric pending" : "numeric"));
+  row.append(type, description, status, category, label, makeCell(record.cents === null ? "Sem valor" : currency(record.cents), record.cents === null ? "numeric pending" : "numeric"));
   const actions = makeCell("");
   const wrapper = document.createElement("div");
   wrapper.className = "row-actions";
@@ -278,9 +412,12 @@ function renderDue() {
   const info = DueCalendar.calculate(state.period, state.dueDay);
   const format = date => new Intl.DateTimeFormat("pt-BR").format(date);
   $("due-date").textContent = format(info.due);
-  const paid = state.payments[state.period] === true;
-  const message = paid ? "Fatura paga" : info.message;
-  const status = paid ? "paid" : info.status;
+  const confirmed = state.payments[state.period] === true;
+  const finance = financeFor();
+  const partial = confirmed && finance.invoiceRemaining > 0;
+  const paid = confirmed && !partial;
+  const message = partial ? "Pagamento parcial" : paid ? "Fatura paga" : info.message;
+  const status = partial ? "partial" : paid ? "paid" : info.status;
   const progress = paid ? 100 : info.progress;
   $("due-message").textContent = message;
   $("due-message").dataset.status = status;
@@ -289,9 +426,16 @@ function renderDue() {
   $("due-progress").setAttribute("aria-valuetext", paid ? "Fatura paga. Pagamento confirmado pelo usuário." : `${message}. ${Math.round(progress)}% do intervalo entre vencimentos.`);
   $("due-progress").setAttribute("aria-label", paid ? "Estado de pagamento da fatura" : "Proximidade do vencimento");
   $("due-fill").style.width = `${progress}%`;
-  $("toggle-payment").textContent = paid ? "Marcar como não paga" : "Marcar como paga";
-  $("toggle-payment").setAttribute("aria-pressed", String(paid));
+  $("toggle-payment").textContent = partial ? "Desfazer pagamento" : paid ? "Marcar como não paga" : "Marcar como paga";
+  $("toggle-payment").setAttribute("aria-pressed", String(confirmed));
   $("due-interval").textContent = `Intervalo: ${format(info.previous)} → ${format(info.due)}`;
+  $("edit-invoice-payment").hidden = !confirmed;
+  $("invoice-payment-note").textContent = confirmed ? `Pagamento registrado: ${currency(finance.invoicePaid)} · ${displayDate(state.settlements[state.period].date)}.${finance.invoicePaid !== finance.invoice ? ` A fatura atual difere do valor pago em ${currency(finance.invoice - finance.invoicePaid)}; confira ou corrija o pagamento.` : ""}` : "A fatura ainda não tem pagamento confirmado.";
+  $("invoice-funding").value = state.invoiceFunding[state.period] ?? "";
+  $("visual-card-period").textContent = periodLabel(state.period);
+  $("visual-card-total").textContent = currency(finance.invoice);
+  $("visual-card-status").textContent = partial ? "Pagamento parcial" : paid ? "Fatura paga" : "Fatura em aberto";
+  $("credit-card").style.backgroundImage = state.cardImage ? `url("${state.cardImage}")` : "";
 }
 function renderManagement() {
   for (const type of ["categories", "labels"]) {
@@ -326,38 +470,30 @@ function renderManagement() {
 }
 function render() {
   const records = currentRecords();
-  const totals = InvoiceMath.calculate(records, state.categories);
+  const credit = creditRecords(records);
+  const totals = InvoiceMath.calculate(credit, state.categories);
+  const finance = financeFor();
   $("period-month").value = state.period.slice(5);
   $("period-year").value = Number(state.period.slice(0, 4));
   $("due-day").value = state.dueDay;
   $("total").textContent = currency(totals.total);
   $("total-caption").textContent = periodLabel(state.period);
+  for (const [id, value] of [["income-expected", finance.incomeExpected], ["income-received", finance.incomeReceived], ["expense-pending", finance.expensePending], ["expense-paid", finance.expensePaid], ["available-balance", finance.available], ["projected-balance", finance.projected], ["monthly-spending", finance.spending]]) {
+    $(id).textContent = currency(value);
+    $(id).classList.toggle("negative-value", value < 0);
+  }
   document.querySelectorAll(".category-summary").forEach(card => card.remove());
   const categories = [...state.categories];
-  if (records.some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
+  if (credit.some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
   $("composition-bar").replaceChildren();
   $("composition-rows").replaceChildren();
   const showDistribution = totals.total > 0 && categories.every(category => totals.groups[category.id] >= 0);
   for (const category of categories) {
-    const subset = records.filter(record => (record.categoryId ?? "uncategorized") === category.id);
+    const subset = credit.filter(record => (record.categoryId ?? "uncategorized") === category.id);
     const pending = subset.filter(record => record.cents === null).length;
-    const card = document.createElement("article");
-    card.className = "card category-summary";
-    card.dataset.category = category.id;
-    const label = document.createElement("div");
-    label.className = "card-label";
     const dot = document.createElement("i");
     dot.className = "dot";
     dot.style.background = category.color;
-    label.append(dot, document.createTextNode(category.name.toLocaleUpperCase("pt-BR")));
-    const amount = document.createElement("div");
-    amount.className = "amount";
-    amount.textContent = currency(totals.groups[category.id]);
-    const foot = document.createElement("div");
-    foot.className = "card-foot";
-    foot.textContent = `${subset.length} ${subset.length === 1 ? "lançamento" : "lançamentos"}${pending ? ` · ${pending} sem valor` : ""}`;
-    card.append(label, amount, foot);
-    document.querySelector(".summary").append(card);
     const segment = document.createElement("div");
     segment.className = "bar-segment";
     segment.style.background = category.color;
@@ -374,7 +510,7 @@ function render() {
     $("composition-rows").append(row);
   }
   $("composition-bar").hidden = !showDistribution;
-  $("composition-note").textContent = showDistribution ? "Todos os lançamentos deste mês compõem o total." : "Valores somados acima. A distribuição visual exige total positivo e subtotais não negativos.";
+  $("composition-note").textContent = showDistribution ? "Somente compras no cartão compõem a fatura." : "Valores somados acima. A distribuição visual exige total positivo e subtotais não negativos.";
   $("combined-label").textContent = categories.length ? categories.map(category => category.name).join(" + ") : "Nenhuma categoria cadastrada";
   $("combined-total").textContent = currency(totals.total);
   if (selectedCategory !== "all" && selectedCategory !== "none" && !state.categories.some(category => category.id === selectedCategory)) selectedCategory = "all";
@@ -390,7 +526,8 @@ function render() {
   }
   selectOptions($("label-filter"), state.labels, "Sem etiqueta", selectedLabel, true);
   const query = compareName($("search").value);
-  const visible = records.filter(record => (selectedCategory === "all" || (record.categoryId ?? "none") === selectedCategory) &&
+  const selectedType = $("type-filter").value;
+  const visible = records.filter(record => (selectedType === "all" || record.type === selectedType || (selectedType === "credit" && record.type === "expense" && record.paymentMethod === "credit")) && (selectedCategory === "all" || (record.categoryId ?? "none") === selectedCategory) &&
     (selectedLabel === "all" || (record.labelId ?? "") === selectedLabel) && compareName(record.description).includes(query));
   $("records").replaceChildren(...visible.map(renderRow));
   $("filtered-total").textContent = currency(InvoiceMath.sum(visible));
@@ -405,6 +542,7 @@ function render() {
   renderManagement();
   renderDue();
   renderCustomSum();
+  renderSalary();
 }
 function openRecord(record = null) {
   editingId = record?.id ?? null;
@@ -418,6 +556,11 @@ function openRecord(record = null) {
   const defaultCategory = ["all", "none"].includes(selectedCategory) ? (selectedCategory === "none" ? "" : state.categories[0]?.id ?? "") : selectedCategory;
   renderFormOptions(record ? record.categoryId ?? "" : defaultCategory, record?.labelId ?? "");
   $("value").value = record?.cents == null ? "" : decimalInput(record.cents);
+  $("record-type").value = record?.type ?? "expense";
+  $("record-date").value = record ? record.date ?? "" : defaultRecordDate(state.period);
+  $("payment-method").value = record?.paymentMethod ?? "credit";
+  $("record-funding").value = record?.funding ?? "";
+  updateRecordFields(record?.status ?? "pending");
   $("record-dialog").showModal();
   $("description").focus();
 }
@@ -467,14 +610,14 @@ function deleteOption(type, id) {
 // Consulta temporária: a seleção não faz parte dos dados financeiros persistidos.
 function availableSumCategories() {
   const categories = [...state.categories];
-  if (currentRecords().some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
+  if (creditRecords().some(record => record.categoryId === null)) categories.push({ id: "uncategorized", name: "Sem categoria", color: "#8e8998" });
   return categories;
 }
 function renderCustomResult() {
   const categories = availableSumCategories();
   $("custom-period").textContent = periodLabel(state.period);
   try {
-    $("custom-total").textContent = currency(InvoiceMath.selectedTotal(currentRecords(), customSelection));
+    $("custom-total").textContent = currency(InvoiceMath.selectedTotal(creditRecords(), customSelection));
     $("custom-error").hidden = true;
   } catch (error) {
     $("custom-total").textContent = "—";
@@ -496,7 +639,7 @@ function renderCustomSum() {
   customAvailable = new Set([...customAvailable, ...available].filter(id => registered.has(id)));
   const focusedId = document.activeElement?.dataset.sumCategory;
   $("sum-options").replaceChildren();
-  const totals = InvoiceMath.calculate(currentRecords(), state.categories);
+  const totals = InvoiceMath.calculate(creditRecords(), state.categories);
   for (const category of categories) {
     const label = document.createElement("label");
     label.className = "sum-option";
@@ -516,10 +659,15 @@ function renderCustomSum() {
   renderCustomResult();
 }
 $("toggle-payment").addEventListener("click", () => {
-  state.payments[state.period] = state.payments[state.period] !== true;
-  const saved = saveState();
-  renderDue();
-  if (saved) notify(state.payments[state.period] ? "Fatura deste mês marcada como paga." : "Marcação de pagamento desfeita para este mês.");
+  if (!state.payments[state.period]) { openSettlement(); return; }
+  const period = state.period;
+  confirmAction("Desfazer pagamento da fatura?", "O registro de saída de dinheiro será desfeito somente para este mês. As compras permanecem intactas.", "Marcar como não paga", () => {
+    state.payments[period] = false;
+    delete state.settlements[period];
+    const saved = saveState();
+    render();
+    if (saved) notify("Pagamento desfeito para este mês.");
+  });
 });
 $("sum-categories").addEventListener("click", () => {
   customAvailable = new Set(availableSumCategories().map(category => category.id));
@@ -570,11 +718,21 @@ $("record-form").addEventListener("submit", event => {
     const labelId = $("record-label").value || null;
     if (categoryId && !state.categories.some(category => category.id === categoryId)) throw new Error("Selecione uma categoria válida.");
     if (labelId && !state.labels.some(label => label.id === labelId)) throw new Error("Selecione uma etiqueta válida.");
-    const record = { id: editingId ?? newId(), description, categoryId, labelId, cents };
+    const type = $("record-type").value;
+    const date = $("record-date").value || null;
+    const previousRecord = (state.invoices[editingPeriod] ?? []).find(item => item.id === editingId);
+    invalidField = "record-date";
+    if (!validDate(date) && !(previousRecord && previousRecord.date === null && date === null)) throw new Error("Preencha uma data válida para o lançamento.");
+    const status = $("record-status").value;
+    if (["received", "paid"].includes(status) && cents === null) { invalidField = "value"; throw new Error("Um valor confirmado precisa ser preenchido."); }
+    const paymentMethod = type === "expense" ? $("payment-method").value : null;
+    const funding = type === "expense" && paymentMethod !== "credit" ? $("record-funding").value || null : null;
+    const record = { id: editingId ?? newId(), description, categoryId, labelId, cents, type, date, status, paymentMethod, funding };
     const previous = state.invoices[editingPeriod] ?? [];
     const records = editingId ? previous.map(item => item.id === editingId ? record : item) : [...previous, record];
-    InvoiceMath.calculate(records, state.categories);
-    state.invoices[editingPeriod] = records;
+    const candidate = JSON.parse(JSON.stringify(state));
+    candidate.invoices[editingPeriod] = records;
+    state = validateState(candidate);
     const saved = saveState();
     $("record-dialog").close();
     resetFilters();
@@ -639,7 +797,7 @@ $("due-form").addEventListener("submit", event => {
   $("due-day").removeAttribute("aria-invalid");
   state.dueDay = day;
   const saved = saveState();
-  renderDue();
+  render();
   if (saved) notify("Dia de vencimento atualizado para todos os meses.");
 });
 for (const [id, type, fromRecord] of [["create-category", "categories", true], ["create-label", "labels", true], ["manage-add-category", "categories", false], ["manage-add-label", "labels", false]]) {
@@ -686,16 +844,371 @@ $("confirm-ok").addEventListener("click", () => {
   action?.();
 });
 $("confirm-dialog").addEventListener("cancel", () => { confirmationAction = null; });
-$("clear-data").addEventListener("click", () => confirmAction("Apagar os dados salvos?", `Todos os lançamentos e status de pagamento de TODOS os meses serão apagados. Categorias, etiquetas e dia de vencimento serão preservados.${storageBlocked ? " Os dados ilegíveis serão redefinidos após esta confirmação." : ""}`, "Apagar dados", () => {
+$("clear-data").addEventListener("click", () => confirmAction("Apagar os dados salvos?", `Todos os lançamentos, pagamentos e recebimentos de salário de TODOS os meses serão apagados. Categorias, etiquetas, salário padrão, imagem e dia de vencimento serão preservados.${storageBlocked ? " Os dados ilegíveis serão redefinidos após esta confirmação." : ""}`, "Apagar dados", () => {
   if (storageBlocked) state = emptyState();
   state.invoices = {};
   state.payments = {};
+  state.settlements = {};
+  state.invoiceFunding = {};
+  state.salaryMonths = {};
   storageBlocked = false;
   const saved = saveState();
   resetFilters();
   render();
   if (saved) notify("Lançamentos e pagamentos de todos os meses apagados. Configurações preservadas.");
 }));
+function updateRecordFields(preferredStatus = $("record-status").value) {
+  const income = $("record-type").value === "income";
+  const credit = !income && $("payment-method").value === "credit";
+  $("payment-method-field").hidden = income;
+  $("record-funding-field").hidden = income || credit;
+  $("credit-method-note").hidden = !credit;
+  const options = income ? [["expected", "Prevista"], ["received", "Recebida"]] : [["pending", "Pendente"], ["paid", credit ? "Paga no cartão (sem saída de dinheiro)" : "Paga"]];
+  $("record-status").replaceChildren();
+  for (const [value, name] of options) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = name;
+    $("record-status").append(option);
+  }
+  $("record-status").value = options.some(([value]) => value === preferredStatus) ? preferredStatus : options[0][0];
+}
+function setView(view) {
+  currentView = view;
+  for (const id of ["monthly", "salary"]) {
+    const active = id === view;
+    $(id + "-view").hidden = !active;
+    $("tab-" + id).setAttribute("aria-selected", String(active));
+    $("tab-" + id).tabIndex = active ? 0 : -1;
+  }
+}
+function nonnegativeMoney(text, label) {
+  const cents = InvoiceMath.parseMoney(text);
+  if (cents === null || cents < 0) throw new Error(`Preencha ${label} com um valor maior ou igual a zero.`);
+  return cents;
+}
+function validDayInput(value) {
+  if (!/^\d{1,2}$/.test(value) || Number(value) < 1 || Number(value) > 31) throw new Error("Os dias devem estar entre 1 e 31.");
+  return Number(value);
+}
+function monthCommitments() {
+  const records = currentRecords();
+  const result = records.filter(record => record.type === "expense" && record.paymentMethod !== "credit").map(record => ({ id: record.id, description: record.description, cents: record.cents, date: record.date, funding: record.funding, paid: record.status === "paid" }));
+  const finance = financeFor();
+  if (creditRecords().length || state.payments[state.period]) {
+    const info = DueCalendar.calculate(state.period, state.dueDay);
+    result.push({ id: "invoice", description: "Pagamento da fatura", cents: FinanceMath.safe(finance.invoicePaid + finance.invoiceRemaining), date: localDateString(info.due), funding: state.invoiceFunding[state.period] ?? null, paid: state.payments[state.period] === true && finance.invoiceRemaining === 0, partial: state.payments[state.period] === true && finance.invoiceRemaining > 0, actualDate: state.settlements[state.period]?.date ?? null });
+  }
+  return result.sort((a, b) => (a.date ?? "9999-12-31").localeCompare(b.date ?? "9999-12-31"));
+}
+function commitmentElement(commitment, receipt = null) {
+  const row = document.createElement("div");
+  row.className = "commitment-row";
+  const title = document.createElement("strong");
+  title.textContent = commitment.description;
+  const detail = document.createElement("small");
+  detail.textContent = `${commitment.id === "invoice" ? "Vencimento" : "Data"}: ${displayDate(commitment.date)} · ${commitment.partial ? "Pagamento parcial" : commitment.paid ? "Paga" : "Pendente"}${commitment.actualDate ? ` · pagamento em ${displayDate(commitment.actualDate)}` : ""}`;
+  const amount = document.createElement("span");
+  amount.className = "commitment-amount";
+  amount.textContent = commitment.cents === null ? "Valor não definido" : currency(commitment.cents);
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", `Cobrir ${commitment.description} com`);
+  select.dataset.commitment = commitment.id;
+  for (const [value, text] of [["", "Ainda não vinculado"], ["balance", "Saldo disponível"], ["first", "Primeira quinzena"], ["second", "Segunda quinzena"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    select.append(option);
+  }
+  select.value = commitment.funding ?? "";
+  row.append(title, amount, detail, select);
+  if (receipt) {
+    const coverageDate = receipt.received ? receipt.actualDate : receiptDate(state.period, receipt);
+    if (commitment.date && commitment.date < coverageDate) {
+      const warning = document.createElement("p");
+      warning.className = "timing-warning";
+      warning.textContent = "Atenção: este compromisso vence antes da data deste recebimento.";
+      row.append(warning);
+    }
+  }
+  return row;
+}
+function renderSalary() {
+  const salary = salaryFor();
+  $("salary-period").textContent = `${periodLabel(state.period)} · Configuração e recebimentos deste período`;
+  $("salary-gross").value = decimalInput(salary.grossCents);
+  for (const id of ["first", "second"]) {
+    $("salary-" + id).value = decimalInput(salary[id].expectedCents);
+    $("salary-" + id + "-day").value = salary[id].day;
+  }
+  const expected = FinanceMath.safe(salary.first.expectedCents + salary.second.expectedCents);
+  $("salary-net").textContent = currency(expected);
+  $("salary-difference").textContent = currency(FinanceMath.safe(salary.grossCents - expected));
+  $("salary-receipts").replaceChildren();
+  $("quarter-plans").replaceChildren();
+  const commitments = monthCommitments();
+  const ordered = ["first", "second"].sort((a, b) => salary[a].day - salary[b].day);
+  for (const id of ordered) {
+    const receipt = salary[id];
+    const card = document.createElement("section");
+    card.className = "panel receipt-card";
+    const heading = document.createElement("div");
+    heading.className = "receipt-heading";
+    const name = document.createElement("h3");
+    name.textContent = FUNDINGS[id];
+    const status = document.createElement("span");
+    status.className = `receipt-status ${receipt.received ? "received" : "expected"}`;
+    status.textContent = receipt.received ? "Recebida" : "Prevista";
+    heading.append(name, status);
+    const expectedValue = document.createElement("p");
+    expectedValue.textContent = `Prevista: ${currency(receipt.expectedCents)} · ${displayDate(receiptDate(state.period, receipt))}`;
+    const actual = document.createElement("div");
+    actual.className = "amount";
+    actual.textContent = currency(receipt.received ? receipt.actualCents : 0);
+    const date = document.createElement("p");
+    date.className = "small-note";
+    date.textContent = receipt.received ? `Recebida em ${displayDate(receipt.actualDate)}` : "Ainda não recebida. Você pode confirmar antes da data prevista.";
+    const actions = document.createElement("div");
+    actions.className = "receipt-actions";
+    const confirm = document.createElement("button");
+    confirm.className = "button primary";
+    confirm.dataset.receipt = id;
+    confirm.textContent = receipt.received ? "Corrigir recebimento" : "Marcar como recebida";
+    confirm.setAttribute("aria-label", `${confirm.textContent}: ${FUNDINGS[id]}`);
+    actions.append(confirm);
+    if (receipt.received) {
+      const undo = document.createElement("button");
+      undo.className = "button secondary";
+      undo.dataset.undoReceipt = id;
+      undo.textContent = "Desfazer";
+      undo.setAttribute("aria-label", `Desfazer recebimento: ${FUNDINGS[id]}`);
+      actions.append(undo);
+    }
+    card.append(heading, expectedValue, actual, date, actions);
+    $("salary-receipts").append(card);
+    const selected = commitments.filter(commitment => commitment.funding === id);
+    const committed = InvoiceMath.sum(selected);
+    const reference = receipt.received ? receipt.actualCents : receipt.expectedCents;
+    const left = FinanceMath.safe(reference - committed);
+    const plan = document.createElement("section");
+    plan.className = `quarter-plan${left < 0 || committed > receipt.expectedCents ? " over-budget" : ""}`;
+    const planHeading = document.createElement("h3");
+    planHeading.textContent = `${FUNDINGS[id]} · ${displayDate(receiptDate(state.period, receipt))}`;
+    const text = document.createElement("p");
+    text.textContent = `Previsto ${currency(receipt.expectedCents)} · Recebido ${currency(receipt.received ? receipt.actualCents : 0)} · Compromissos ${currency(committed)}`;
+    const result = document.createElement("strong");
+    result.className = "plan-result";
+    result.textContent = left < 0 ? `Faltam ${currency(-left)}` : `Sobram ${currency(left)}`;
+    plan.append(planHeading, text, result);
+    if (committed > receipt.expectedCents) {
+      const warning = document.createElement("p");
+      warning.className = "timing-warning";
+      warning.textContent = "Os compromissos ultrapassam o recebimento previsto.";
+      plan.append(warning);
+    }
+    if (selected.some(commitment => commitment.cents === null)) {
+      const note = document.createElement("p");
+      note.className = "timing-warning";
+      note.textContent = "Há compromissos sem valor definido, fora do total.";
+      plan.append(note);
+    }
+    if (!selected.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "Nenhum compromisso vinculado a este recebimento.";
+      plan.append(empty);
+    }
+    selected.forEach(commitment => plan.append(commitmentElement(commitment, receipt)));
+    $("quarter-plans").append(plan);
+  }
+  for (const [id, funding] of [["unassigned-commitments", null], ["balance-commitments", "balance"]]) {
+    $(id).replaceChildren();
+    const matching = commitments.filter(commitment => commitment.funding === funding);
+    matching.forEach(commitment => $(id).append(commitmentElement(commitment)));
+    if (!matching.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "Nenhum compromisso nesta área.";
+      $(id).append(empty);
+    }
+  }
+  const balancePending = InvoiceMath.sum(commitments.filter(commitment => commitment.funding === "balance").map(commitment => ({ cents: commitment.id === "invoice" ? financeFor().invoiceRemaining : commitment.paid ? 0 : commitment.cents })));
+  $("balance-plan-note").textContent = `Disponível no mês: ${currency(financeFor().available)} · Pendentes vinculados: ${currency(balancePending)}. O disponível já desconta valores pagos.`;
+}
+function openReceipt(id) {
+  receiptEditing = { id, period: state.period };
+  const receipt = salaryFor()[id];
+  $("receipt-title").textContent = receipt.received ? "Corrigir recebimento" : "Confirmar recebimento";
+  $("receipt-context").textContent = `${FUNDINGS[id]} · ${periodLabel(state.period)}. Você pode confirmar um recebimento antecipado, sem mudar a data prevista.`;
+  $("receipt-value").value = decimalInput(receipt.received ? receipt.actualCents : receipt.expectedCents);
+  $("receipt-date").value = receipt.received ? receipt.actualDate : todayDate();
+  $("receipt-error").hidden = true;
+  $("receipt-dialog").showModal();
+  $("receipt-value").focus();
+}
+function openSettlement() {
+  settlementPeriod = state.period;
+  const existing = state.settlements[state.period];
+  $("settlement-context").textContent = `${periodLabel(state.period)} · Fatura atual ${currency(financeFor().invoice)}. Este pagamento sai do saldo sem gerar uma segunda despesa.`;
+  $("settlement-value").value = decimalInput(existing?.cents ?? financeFor().invoice);
+  $("settlement-date").value = existing?.date ?? todayDate();
+  $("settlement-error").hidden = true;
+  $("settlement-dialog").showModal();
+  $("settlement-value").focus();
+}
+for (const view of ["monthly", "salary"]) {
+  $("tab-" + view).addEventListener("click", () => setView(view));
+  $("tab-" + view).addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? "monthly" : event.key === "End" ? "salary" : currentView === "salary" ? "monthly" : "salary";
+    setView(next);
+    $("tab-" + next).focus();
+  });
+}
+$("nav-salary").addEventListener("click", event => { event.preventDefault(); setView("salary"); $("tab-salary").scrollIntoView({ block: "start" }); });
+document.querySelector('.nav-link[href="#lancamentos"]').addEventListener("click", () => setView("monthly"));
+$("record-type").addEventListener("change", () => updateRecordFields());
+$("payment-method").addEventListener("change", () => updateRecordFields());
+$("type-filter").addEventListener("change", render);
+$("edit-invoice-payment").addEventListener("click", openSettlement);
+$("invoice-funding").addEventListener("change", () => {
+  state.invoiceFunding[state.period] = $("invoice-funding").value || null;
+  saveState();
+  renderSalary();
+});
+$("salary-config").addEventListener("submit", event => {
+  event.preventDefault();
+  try {
+    const defaults = validateSalaryDefaults({ grossCents: nonnegativeMoney($("salary-gross").value, "o salário bruto"), first: { cents: nonnegativeMoney($("salary-first").value, "a primeira quinzena"), day: validDayInput($("salary-first-day").value) }, second: { cents: nonnegativeMoney($("salary-second").value, "a segunda quinzena"), day: validDayInput($("salary-second-day").value) } });
+    const candidate = JSON.parse(JSON.stringify(state));
+    const current = salaryFor();
+    candidate.salaryMonths[state.period] = { grossCents: defaults.grossCents, first: { ...current.first, expectedCents: defaults.first.cents, day: defaults.first.day }, second: { ...current.second, expectedCents: defaults.second.cents, day: defaults.second.day } };
+    candidate.salaryDefaults = defaults;
+    state = validateState(candidate);
+    $("salary-config-error").hidden = true;
+    const saved = saveState();
+    render();
+    if (saved) notify("Configuração salva para este mês e para os próximos ainda não configurados.");
+  } catch (error) {
+    $("salary-config-error").textContent = error.message;
+    $("salary-config-error").hidden = false;
+  }
+});
+$("salary-receipts").addEventListener("click", event => {
+  const confirm = event.target.closest("button[data-receipt]");
+  if (confirm) { openReceipt(confirm.dataset.receipt); return; }
+  const undo = event.target.closest("button[data-undo-receipt]");
+  if (!undo) return;
+  const period = state.period, id = undo.dataset.undoReceipt;
+  confirmAction("Desfazer recebimento?", `Somente ${FUNDINGS[id]} de ${periodLabel(period)} voltará a ser prevista. A fatura não será alterada.`, "Desfazer recebimento", () => {
+    state.salaryMonths[period][id] = { ...state.salaryMonths[period][id], received: false, actualCents: null, actualDate: null };
+    const saved = saveState();
+    render();
+    if (saved) notify("Confirmação de recebimento desfeita.");
+  });
+});
+$("receipt-form").addEventListener("submit", event => {
+  event.preventDefault();
+  try {
+    const value = nonnegativeMoney($("receipt-value").value, "o valor recebido");
+    const date = $("receipt-date").value;
+    if (!validDate(date)) throw new Error("Informe uma data real de recebimento válida.");
+    const { id, period } = receiptEditing;
+    const candidate = JSON.parse(JSON.stringify(state));
+    const salary = salaryFor(period);
+    candidate.salaryMonths[period] = { ...salary, [id]: { ...salary[id], received: true, actualCents: value, actualDate: date } };
+    state = validateState(candidate);
+    const saved = saveState();
+    $("receipt-dialog").close();
+    render();
+    if (saved) notify("Quinzena recebida. Saldo atualizado sem duplicar a entrada.");
+  } catch (error) {
+    $("receipt-error").textContent = error.message;
+    $("receipt-error").hidden = false;
+  }
+});
+$("settlement-form").addEventListener("submit", event => {
+  event.preventDefault();
+  try {
+    const cents = InvoiceMath.parseMoney($("settlement-value").value);
+    if (cents === null) throw new Error("Preencha o valor pago.");
+    const date = $("settlement-date").value;
+    if (!validDate(date)) throw new Error("Informe uma data válida para o pagamento.");
+    const candidate = JSON.parse(JSON.stringify(state));
+    candidate.payments[settlementPeriod] = true;
+    candidate.settlements[settlementPeriod] = { cents, date };
+    state = validateState(candidate);
+    const saved = saveState();
+    $("settlement-dialog").close();
+    render();
+    if (saved) notify("Pagamento da fatura registrado sem criar outra despesa.");
+  } catch (error) {
+    $("settlement-error").textContent = error.message;
+    $("settlement-error").hidden = false;
+  }
+});
+for (const [dialog, prefix] of [["receipt-dialog", "receipt"], ["settlement-dialog", "settlement"]]) for (const suffix of ["close", "cancel"]) $(prefix + "-" + suffix).addEventListener("click", () => $(dialog).close());
+$("salary-view").addEventListener("change", event => {
+  const select = event.target.closest("select[data-commitment]");
+  if (!select) return;
+  const funding = select.value || null;
+  if (select.dataset.commitment === "invoice") state.invoiceFunding[state.period] = funding;
+  else {
+    const record = currentRecords().find(item => item.id === select.dataset.commitment);
+    if (!record) return;
+    record.funding = funding;
+  }
+  saveState();
+  render();
+});
+$("card-upload-button").addEventListener("keydown", event => {
+  if (!["Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  $("card-upload").click();
+});
+$("card-upload").addEventListener("change", async () => {
+  const file = $("card-upload").files?.[0];
+  if (!file) return;
+  try {
+    if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type) || file.size > 10 * 1024 * 1024) throw new Error("Envie uma imagem PNG, JPEG, WebP ou AVIF de até 10 MB.");
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    try {
+      image.src = url;
+      await image.decode();
+      if (!image.naturalWidth || image.naturalWidth * image.naturalHeight > 40000000) throw new Error("A imagem é grande demais. Use uma versão com até 40 megapixels.");
+      const scale = Math.min(1, 1280 / image.naturalWidth, 1280 / image.naturalHeight);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.naturalWidth * scale);
+      canvas.height = Math.round(image.naturalHeight * scale);
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#302343";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const encoded = canvas.toDataURL("image/jpeg", .85);
+      if (encoded.length > 1500000) throw new Error("A imagem não coube no armazenamento. Envie uma imagem menor.");
+      if (storageBlocked) throw new Error("O salvamento está suspenso. Recupere o armazenamento antes de personalizar o cartão.");
+      const previous = state.cardImage;
+      state.cardImage = encoded;
+      if (!saveState()) { state.cardImage = previous; throw new Error("Não foi possível salvar a imagem. Os dados financeiros foram preservados."); }
+      $("card-image-error").hidden = true;
+      renderDue();
+      notify("Imagem do cartão salva neste navegador.");
+    } finally { URL.revokeObjectURL(url); }
+  } catch (error) {
+    $("card-image-error").textContent = error.message;
+    $("card-image-error").hidden = false;
+  }
+  $("card-upload").value = "";
+});
+$("restore-card").addEventListener("click", () => {
+  const previous = state.cardImage;
+  state.cardImage = null;
+  if (!saveState()) { state.cardImage = previous; return; }
+  $("card-image-error").hidden = true;
+  renderDue();
+  notify("Imagem padrão restaurada.");
+});
+
 render();
 if (!storageBlocked) {
   const saved = saveState();
